@@ -132,26 +132,16 @@ def all_games() -> list:
 
 def parse_odds(game: dict) -> dict:
     """
-    Extract spreads and totals per book from ActionNetwork market data.
-
-    ActionNetwork markets structure:
-    {
-      "15": {           <- book_id as string key
-        "event": {
-          "spread": [{"side":"away","value":3.5,"odds":-110}, ...],
-          "total":  [{"side":"over","value":44.5,"odds":-110}, ...]
-        }
-      },
-      ...
-    }
-    Also handles flat list of outcome objects with book_id field.
+    Extract moneylines, spreads, and totals per book.
+    Also computes best_bets — instant answer to 'where do I get the best number?'
     """
     markets = game.get("markets") or {}
     away    = game["away"]
     home    = game["home"]
 
-    spreads: dict = {}
-    totals:  dict = {}
+    spreads:   dict = {}
+    totals:    dict = {}
+    moneylines: dict = {}
 
     def fmt(val: int | None) -> str | None:
         if val is None:
@@ -178,6 +168,17 @@ def parse_odds(game: dict) -> dict:
         elif side == "under":
             totals[book_name]["under_px"] = fmt(odds)
 
+    def add_ml(book_name, side, odds):
+        if book_name not in moneylines:
+            moneylines[book_name] = {"away_px": None, "home_px": None,
+                                     "away_odds": None, "home_odds": None}
+        if side in ("away", "road"):
+            moneylines[book_name]["away_px"]   = fmt(odds)
+            moneylines[book_name]["away_odds"] = odds
+        elif side == "home":
+            moneylines[book_name]["home_px"]   = fmt(odds)
+            moneylines[book_name]["home_odds"] = odds
+
     # Format A: markets keyed by book_id string
     if markets and isinstance(next(iter(markets.values()), None), dict):
         for book_id_str, book_data in markets.items():
@@ -191,28 +192,25 @@ def parse_odds(game: dict) -> dict:
             event = book_data.get("event") or book_data
 
             for outcome in (event.get("spread") or []):
-                add_spread(book_name,
-                           outcome.get("side", ""),
-                           outcome.get("value"),
-                           outcome.get("odds"))
-
+                add_spread(book_name, outcome.get("side",""),
+                           outcome.get("value"), outcome.get("odds"))
             for outcome in (event.get("total") or []):
-                add_total(book_name,
-                          outcome.get("side", ""),
-                          outcome.get("value"),
-                          outcome.get("odds"))
+                add_total(book_name, outcome.get("side",""),
+                          outcome.get("value"), outcome.get("odds"))
+            for outcome in (event.get("moneyline") or []):
+                add_ml(book_name, outcome.get("side",""), outcome.get("odds"))
 
-    # Format B: markets is a flat list of outcome objects each with book_id
+    # Format B: flat list
     elif isinstance(markets, list):
         for outcome in markets:
             bid = outcome.get("book_id")
             if bid not in BOOKS:
                 continue
             book_name = BOOKS[bid]
-            mtype = outcome.get("type", "")
-            side  = outcome.get("side", "")
-            value = outcome.get("value")
-            odds  = outcome.get("odds")
+            mtype  = outcome.get("type", "")
+            side   = outcome.get("side", "")
+            value  = outcome.get("value")
+            odds   = outcome.get("odds")
             period = outcome.get("period", "event")
             if period not in ("event", "game", "full"):
                 continue
@@ -220,18 +218,99 @@ def parse_odds(game: dict) -> dict:
                 add_spread(book_name, side, value, odds)
             elif mtype == "total":
                 add_total(book_name, side, value, odds)
+            elif mtype == "moneyline":
+                add_ml(book_name, side, odds)
 
-    # Remove incomplete entries
-    spreads = {b: v for b, v in spreads.items()
-               if v["away_pt"] is not None and v["home_pt"] is not None}
-    totals  = {b: v for b, v in totals.items()
-               if v["total"] is not None}
+    # Clean up incomplete entries
+    spreads    = {b: v for b, v in spreads.items()
+                  if v["away_pt"] is not None and v["home_pt"] is not None}
+    totals     = {b: v for b, v in totals.items() if v["total"] is not None}
+    moneylines = {b: v for b, v in moneylines.items()
+                  if v["away_odds"] is not None or v["home_odds"] is not None}
+
+    # ── Build best_bets: instant answers ─────────────────────────────────────
+    best_bets = []
+
+    # Best moneyline per team
+    for team_key, side_label, odds_key in [
+        (away, f"{away} ML", "away_odds"),
+        (home, f"{home} ML", "home_odds"),
+    ]:
+        entries = [(b, v[odds_key]) for b, v in moneylines.items()
+                   if v[odds_key] is not None]
+        if not entries:
+            continue
+        # Best = highest value (most positive for dog, least negative for fave)
+        entries.sort(key=lambda x: -x[1])
+        best_book, best_odds = entries[0]
+        others = [{"book": b, "odds": fmt(o)} for b, o in entries[1:]]
+        best_bets.append({
+            "type":  "ml",
+            "label": side_label,
+            "book":  best_book,
+            "odds":  fmt(best_odds),
+            "raw":   best_odds,
+            "others": others,
+        })
+
+    # Best spread per team (best point first, then best juice if tied)
+    for side_label, pt_key, px_key in [
+        (f"{away} Spread", "away_pt", "away_px"),
+        (f"{home} Spread", "home_pt", "home_px"),
+    ]:
+        entries = [(b, v[pt_key], v[px_key]) for b, v in spreads.items()
+                   if v[pt_key] is not None]
+        if not entries:
+            continue
+        entries.sort(key=lambda x: -x[1])  # highest point = best
+        best_book, best_pt, best_px = entries[0]
+        others = [{"book": b, "odds": f"{pt} ({px})"} for b, pt, px in entries[1:]]
+        best_bets.append({
+            "type":  "spread",
+            "label": side_label,
+            "book":  best_book,
+            "odds":  f"{'+' if best_pt > 0 else ''}{best_pt} ({best_px})",
+            "raw":   best_pt,
+            "others": others,
+        })
+
+    # Best over and under
+    if totals:
+        total_entries = [(b, v["total"], v["over_px"], v["under_px"])
+                         for b, v in totals.items() if v["total"] is not None]
+        if total_entries:
+            # Best over = lowest total
+            over_sorted = sorted(total_entries, key=lambda x: x[1])
+            bo_book, bo_total, bo_px, _ = over_sorted[0]
+            others_over = [{"book": b, "odds": f"{t} ({opx})"} for b, t, opx, _ in over_sorted[1:]]
+            best_bets.append({
+                "type":  "over",
+                "label": "Best Over",
+                "book":  bo_book,
+                "odds":  f"{bo_total} ({bo_px})",
+                "raw":   bo_total,
+                "others": others_over,
+            })
+            # Best under = highest total
+            under_sorted = sorted(total_entries, key=lambda x: -x[1])
+            bu_book, bu_total, _, bu_px = under_sorted[0]
+            others_under = [{"book": b, "odds": f"{t} ({upx})"} for b, t, _, upx in under_sorted[1:]]
+            best_bets.append({
+                "type":  "under",
+                "label": "Best Under",
+                "book":  bu_book,
+                "odds":  f"{bu_total} ({bu_px})",
+                "raw":   bu_total,
+                "others": others_under,
+            })
 
     return {
-        "away":    away,
-        "home":    home,
-        "spreads": spreads,
-        "totals":  totals,
+        "away":       away,
+        "home":       home,
+        "moneylines": moneylines,
+        "spreads":    spreads,
+        "totals":     totals,
+        "best_bets":  best_bets,
     }
 
 

@@ -289,6 +289,64 @@ table.lines tr:hover td { background: #161b22; }
   padding: 12px 0;
 }
 
+/* ── Best Bets answer card ── */
+.best-bets-card {
+  background: #0d2818;
+  border: 1px solid #1a4a2a;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  padding: 16px 20px;
+}
+.best-bets-title {
+  color: #3fb950;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+.best-bet-row {
+  align-items: center;
+  border-top: 1px solid #1a4a2a;
+  display: flex;
+  gap: 10px;
+  padding: 9px 0;
+  flex-wrap: wrap;
+}
+.best-bet-row:first-of-type { border-top: none; }
+.bet-label {
+  color: #8b949e;
+  font-size: 12px;
+  min-width: 140px;
+}
+.bet-answer {
+  color: #3fb950;
+  font-size: 14px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+.bet-book {
+  background: #1a4a2a;
+  border-radius: 4px;
+  color: #3fb950;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+}
+.bet-arrow {
+  color: #3fb950;
+  font-size: 16px;
+}
+.bet-others {
+  color: #484f58;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+/* ── Moneyline table ── */
+.ml-fave  { color: #f85149; }
+.ml-dog   { color: #3fb950; }
+
 /* ── Loading ── */
 .spinner {
   animation: spin 0.65s linear infinite;
@@ -477,10 +535,12 @@ function loadOdds(id, away, home, league, date) {
 
 // ── Render odds ───────────────────────────────────────────────────────────────
 function renderOdds(data, away, home, league, date) {
-  const panel   = document.getElementById('oddsPanel');
-  const spreads = data.spreads || {};
-  const totals  = data.totals  || {};
-  const code    = leagueCode(league);
+  const panel      = document.getElementById('oddsPanel');
+  const spreads    = data.spreads    || {};
+  const totals     = data.totals     || {};
+  const moneylines = data.moneylines || {};
+  const bestBets   = data.best_bets  || [];
+  const code       = leagueCode(league);
 
   let html = `
     <div class="odds-header">
@@ -492,25 +552,74 @@ function renderOdds(data, away, home, league, date) {
     </div>
   `;
 
+  // ── Best Bets answer card ──────────────────────────────────────────────────
+  if (bestBets.length) {
+    html += `<div class="best-bets-card">
+      <div class="best-bets-title">✓ Best Book For Each Bet</div>`;
+
+    for (const bet of bestBets) {
+      const othersHtml = bet.others && bet.others.length
+        ? `<span class="bet-others">  (${bet.others.slice(0,3).map(o => `${o.book}: ${o.odds}`).join(' · ')})</span>`
+        : '';
+      html += `
+        <div class="best-bet-row">
+          <span class="bet-label">${esc(bet.label)}</span>
+          <span class="bet-arrow">→</span>
+          <span class="bet-book">${esc(bet.book)}</span>
+          <span class="bet-answer">${esc(bet.odds)}</span>
+          ${othersHtml}
+        </div>`;
+    }
+    html += `</div>`;
+  }
+
+  // ── Moneylines ─────────────────────────────────────────────────────────────
+  html += '<div class="odds-section"><div class="section-title">Moneyline</div>';
+  const mlEntries = Object.entries(moneylines);
+  if (mlEntries.length) {
+    const awayOdds = mlEntries.map(([,v]) => v.away_odds).filter(x => x != null);
+    const homeOdds = mlEntries.map(([,v]) => v.home_odds).filter(x => x != null);
+    const bestAway = awayOdds.length ? Math.max(...awayOdds) : null;
+    const bestHome = homeOdds.length ? Math.max(...homeOdds) : null;
+
+    mlEntries.sort((a, b) => (b[1].away_odds || -9999) - (a[1].away_odds || -9999));
+
+    html += `<table class="lines"><thead><tr>
+      <th>Book</th><th>${esc(away)}</th><th>${esc(home)}</th>
+    </tr></thead><tbody>`;
+
+    for (const [book, v] of mlEntries) {
+      const aBest = v.away_odds === bestAway;
+      const hBest = v.home_odds === bestHome;
+      const aCls  = (v.away_odds > 0) ? 'ml-dog' : 'ml-fave';
+      const hCls  = (v.home_odds > 0) ? 'ml-dog' : 'ml-fave';
+      html += `<tr>
+        <td class="book">${esc(book)}</td>
+        <td class="num ${aBest ? 'best' : ''} ${aCls}">
+          ${v.away_px || '—'} ${aBest ? '<span class="best-tag">Best</span>' : ''}
+        </td>
+        <td class="num ${hBest ? 'best' : ''} ${hCls}">
+          ${v.home_px || '—'} ${hBest ? '<span class="best-tag">Best</span>' : ''}
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="no-lines">No moneyline posted yet.</div>';
+  }
+  html += '</div>';
+
   // ── Spreads ────────────────────────────────────────────────────────────────
   html += '<div class="odds-section"><div class="section-title">Point Spreads</div>';
-
   const spreadEntries = Object.entries(spreads);
   if (spreadEntries.length) {
-    const awayPts  = spreadEntries.map(([,v]) => v.away_pt);
-    const homePts  = spreadEntries.map(([,v]) => v.home_pt);
-    const bestAway = Math.max(...awayPts);
-    const bestHome = Math.max(...homePts);
-
-    // Sort: best away first
+    const bestAway = Math.max(...spreadEntries.map(([,v]) => v.away_pt));
+    const bestHome = Math.max(...spreadEntries.map(([,v]) => v.home_pt));
     spreadEntries.sort((a, b) => b[1].away_pt - a[1].away_pt);
 
-    html += `<table class="lines">
-      <thead><tr>
-        <th>Book</th>
-        <th>${esc(away)}</th>
-        <th>${esc(home)}</th>
-      </tr></thead><tbody>`;
+    html += `<table class="lines"><thead><tr>
+      <th>Book</th><th>${esc(away)}</th><th>${esc(home)}</th>
+    </tr></thead><tbody>`;
 
     for (const [book, v] of spreadEntries) {
       const aBest = v.away_pt === bestAway;
@@ -535,22 +644,16 @@ function renderOdds(data, away, home, league, date) {
 
   // ── Totals ─────────────────────────────────────────────────────────────────
   html += '<div class="odds-section"><div class="section-title">Totals — Over / Under</div>';
-
   const totalEntries = Object.entries(totals);
   if (totalEntries.length) {
     const pts       = totalEntries.map(([,v]) => v.total);
-    const bestOver  = Math.min(...pts);   // lower total = better for over bettors
-    const bestUnder = Math.max(...pts);   // higher total = better for under bettors
-
+    const bestOver  = Math.min(...pts);
+    const bestUnder = Math.max(...pts);
     totalEntries.sort((a, b) => a[1].total - b[1].total);
 
-    html += `<table class="lines">
-      <thead><tr>
-        <th>Book</th>
-        <th>Total</th>
-        <th>Over</th>
-        <th>Under</th>
-      </tr></thead><tbody>`;
+    html += `<table class="lines"><thead><tr>
+      <th>Book</th><th>Total</th><th>Over</th><th>Under</th>
+    </tr></thead><tbody>`;
 
     for (const [book, v] of totalEntries) {
       const oBest = v.total === bestOver;

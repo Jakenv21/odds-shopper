@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Odds Shopper — Best Lines Across All Books</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ── */
+.header {
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+.header-left h1 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #58a6ff;
+  letter-spacing: -0.3px;
+}
+.header-left .tagline {
+  font-size: 12px;
+  color: #8b949e;
+  margin-top: 2px;
+}
+.header-right {
+  font-size: 11px;
+  color: #484f58;
+}
+
+/* ── Layout ── */
+.layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 0;
+  flex: 1;
+  overflow: hidden;
+}
+@media (max-width: 700px) {
+  .layout { grid-template-columns: 1fr; }
+  .odds-panel { min-height: 50vh; }
+}
+
+/* ── Left panel ── */
+.left-panel {
+  border-right: 1px solid #21262d;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.left-inner {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  flex: 1;
+}
+
+.search-box {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  font-size: 13px;
+  outline: none;
+  padding: 9px 12px;
+  transition: border-color 0.15s;
+  flex-shrink: 0;
+}
+.search-box:focus { border-color: #58a6ff; }
+.search-box::placeholder { color: #484f58; }
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.filter-btn {
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 4px 9px;
+  text-transform: uppercase;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.filter-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+.filter-btn.active {
+  background: #1f6feb;
+  border-color: #388bfd;
+  color: #fff;
+}
+
+.games-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #484f58;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.games-scroll {
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.games-scroll::-webkit-scrollbar { width: 4px; }
+.games-scroll::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+.game-card {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 10px 12px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.game-card:hover { border-color: #388bfd; }
+.game-card.active { border-color: #58a6ff; background: #1c2433; }
+
+.game-teams {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e6edf3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.game-teams .vs { color: #484f58; font-weight: 400; }
+
+.game-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8b949e;
+}
+.league-chip {
+  background: #21262d;
+  border-radius: 3px;
+  color: #8b949e;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+}
+.live-chip {
+  background: #3d1a1a;
+  border-radius: 3px;
+  color: #f85149;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  text-transform: uppercase;
+}
+
+.empty-state {
+  color: #484f58;
+  font-size: 13px;
+  padding: 24px 0;
+  text-align: center;
+}
+
+/* ── Right panel: odds ── */
+.odds-panel {
+  overflow-y: auto;
+  padding: 24px;
+}
+.odds-panel::-webkit-scrollbar { width: 4px; }
+.odds-panel::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+.placeholder {
+  align-items: center;
+  color: #484f58;
+  display: flex;
+  flex-direction: column;
+  font-size: 15px;
+  gap: 10px;
+  height: 100%;
+  justify-content: center;
+  min-height: 300px;
+  text-align: center;
+}
+.placeholder .icon { font-size: 40px; }
+
+.odds-header { margin-bottom: 24px; }
+.odds-matchup {
+  font-size: 24px;
+  font-weight: 700;
+  color: #e6edf3;
+  line-height: 1.2;
+}
+.odds-matchup .at { color: #484f58; font-size: 18px; }
+.odds-meta { color: #8b949e; font-size: 12px; margin-top: 6px; }
+.refresh-note {
+  display: inline-block;
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  color: #484f58;
+  font-size: 11px;
+  margin-top: 8px;
+  padding: 3px 8px;
+}
+
+.odds-section { margin-bottom: 28px; }
+.section-title {
+  border-bottom: 1px solid #21262d;
+  color: #8b949e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  text-transform: uppercase;
+}
+
+table.lines {
+  border-collapse: collapse;
+  width: 100%;
+}
+table.lines th {
+  color: #8b949e;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  padding: 6px 14px;
+  text-align: left;
+  text-transform: uppercase;
+}
+table.lines td {
+  border-top: 1px solid #161b22;
+  font-size: 13px;
+  padding: 9px 14px;
+}
+table.lines tr:hover td { background: #161b22; }
+
+.book { color: #c9d1d9; font-weight: 600; }
+
+.num {
+  color: #c9d1d9;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+.num.best { color: #3fb950; font-weight: 700; }
+
+.best-tag {
+  background: #0d2818;
+  border: 1px solid #1a4a2a;
+  border-radius: 3px;
+  color: #3fb950;
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-left: 6px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.no-lines {
+  color: #484f58;
+  font-size: 13px;
+  padding: 12px 0;
+}
+
+/* ── Loading ── */
+.spinner {
+  animation: spin 0.65s linear infinite;
+  border: 2px solid #21262d;
+  border-top-color: #58a6ff;
+  border-radius: 50%;
+  display: inline-block;
+  height: 16px;
+  margin-right: 8px;
+  vertical-align: middle;
+  width: 16px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-msg {
+  color: #8b949e;
+  font-size: 13px;
+  padding: 40px 0;
+  text-align: center;
+}
+
+/* ── Footer ── */
+.footer {
+  border-top: 1px solid #21262d;
+  color: #484f58;
+  font-size: 11px;
+  padding: 12px 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>Odds Shopper</h1>
+    <div class="tagline">Best lines across DraftKings, FanDuel, BetMGM, Caesars, bet365 &amp; more</div>
+  </div>
+  <div class="header-right">NFL · NCAAF · NBA · NCAAB · MLB · NHL</div>
+</div>
+
+<div class="layout">
+
+  <!-- LEFT: game search -->
+  <div class="left-panel">
+    <div class="left-inner">
+      <input id="search" class="search-box" type="text"
+             placeholder="Search team or matchup…" autocomplete="off"/>
+
+      <div class="filters" id="filters">
+        <button class="filter-btn active" data-sport="ALL">All</button>
+        <button class="filter-btn" data-sport="NFL">NFL</button>
+        <button class="filter-btn" data-sport="NCAAF">NCAAF</button>
+        <button class="filter-btn" data-sport="NBA">NBA</button>
+        <button class="filter-btn" data-sport="NCAAB">NCAAB</button>
+        <button class="filter-btn" data-sport="MLB">MLB</button>
+        <button class="filter-btn" data-sport="NHL">NHL</button>
+      </div>
+
+      <div class="games-label" id="gamesLabel">Games</div>
+
+      <div class="games-scroll" id="gamesList">
+        <div class="loading-msg"><span class="spinner"></span>Loading games…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: odds display -->
+  <div class="odds-panel" id="oddsPanel">
+    <div class="placeholder">
+      <div class="icon">📊</div>
+      <div>Select a game to see the best lines across all books</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  Odds Shopper &nbsp;·&nbsp; Data via odds-api.io &nbsp;·&nbsp; Lines refresh every 5 minutes
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let allGames     = [];
+let activeFilter = 'ALL';
+let activeId     = null;
+
+// ── League detection ──────────────────────────────────────────────────────────
+function leagueCode(name) {
+  const n = (name || '').toUpperCase();
+  if (n.includes('NFL') || n.includes('NATIONAL FOOTBALL'))   return 'NFL';
+  if (n.includes('NCAAF') || n.includes('COLLEGE FOOTBALL') ||
+      n.includes('NCAA FOOTBALL'))                             return 'NCAAF';
+  if (n.includes('NBA') || n.includes('NATIONAL BASKETBALL')) return 'NBA';
+  if (n.includes('NCAAB') || n.includes('COLLEGE BASKETBALL') ||
+      n.includes('NCAA BASKETBALL'))                           return 'NCAAB';
+  if (n.includes('MLB') || n.includes('MAJOR LEAGUE'))        return 'MLB';
+  if (n.includes('NHL') || n.includes('NATIONAL HOCKEY'))     return 'NHL';
+  return name || '';
+}
+
+// ── Formatting ────────────────────────────────────────────────────────────────
+function fmtSpread(pt) {
+  if (pt == null) return '—';
+  return pt > 0 ? '+' + pt : String(pt);
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+    });
+  } catch { return iso; }
+}
+
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Render game list ──────────────────────────────────────────────────────────
+function renderGames() {
+  const q   = document.getElementById('search').value.trim().toLowerCase();
+  const el  = document.getElementById('gamesList');
+  const lbl = document.getElementById('gamesLabel');
+
+  const filtered = allGames.filter(g => {
+    const code = leagueCode(g.league);
+    const sport_ok = (activeFilter === 'ALL') || (code === activeFilter);
+    const search_ok = !q ||
+      g.home.toLowerCase().includes(q) ||
+      g.away.toLowerCase().includes(q);
+    return sport_ok && search_ok;
+  });
+
+  lbl.textContent = `${filtered.length} game${filtered.length !== 1 ? 's' : ''}`;
+
+  if (!filtered.length) {
+    el.innerHTML = '<div class="empty-state">No games found</div>';
+    return;
+  }
+
+  el.innerHTML = filtered.map(g => `
+    <div class="game-card ${g.id === activeId ? 'active' : ''}"
+         data-id="${g.id}"
+         data-home="${esc(g.home)}"
+         data-away="${esc(g.away)}"
+         data-league="${esc(g.league)}"
+         data-date="${esc(g.date)}">
+      <div class="game-teams">
+        ${esc(g.away)} <span class="vs">@</span> ${esc(g.home)}
+      </div>
+      <div class="game-info">
+        <span class="league-chip">${esc(leagueCode(g.league))}</span>
+        ${g.status === 'live' ? '<span class="live-chip">Live</span>' : ''}
+        <span>${fmtDate(g.date)}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── Load odds ─────────────────────────────────────────────────────────────────
+function loadOdds(id, away, home, league, date) {
+  if (activeId === id) return;
+  activeId = id;
+  renderGames();
+
+  document.getElementById('oddsPanel').innerHTML =
+    '<div class="loading-msg"><span class="spinner"></span>Fetching best lines…</div>';
+
+  fetch(`/api/odds/${id}`)
+    .then(r => {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    })
+    .then(data => renderOdds(data, away, home, league, date))
+    .catch(() => {
+      document.getElementById('oddsPanel').innerHTML =
+        '<div class="loading-msg">Could not load odds — try again in a moment.</div>';
+    });
+}
+
+// ── Render odds ───────────────────────────────────────────────────────────────
+function renderOdds(data, away, home, league, date) {
+  const panel   = document.getElementById('oddsPanel');
+  const spreads = data.spreads || {};
+  const totals  = data.totals  || {};
+  const code    = leagueCode(league);
+
+  let html = `
+    <div class="odds-header">
+      <div class="odds-matchup">
+        ${esc(away)} <span class="at">@</span> ${esc(home)}
+      </div>
+      <div class="odds-meta">${esc(code)} &nbsp;·&nbsp; ${fmtDate(date)}</div>
+      <div class="refresh-note">⟳ Refreshes every 5 min</div>
+    </div>
+  `;
+
+  // ── Spreads ────────────────────────────────────────────────────────────────
+  html += '<div class="odds-section"><div class="section-title">Point Spreads</div>';
+
+  const spreadEntries = Object.entries(spreads);
+  if (spreadEntries.length) {
+    const awayPts  = spreadEntries.map(([,v]) => v.away_pt);
+    const homePts  = spreadEntries.map(([,v]) => v.home_pt);
+    const bestAway = Math.max(...awayPts);
+    const bestHome = Math.max(...homePts);
+
+    // Sort: best away first
+    spreadEntries.sort((a, b) => b[1].away_pt - a[1].away_pt);
+
+    html += `<table class="lines">
+      <thead><tr>
+        <th>Book</th>
+        <th>${esc(away)}</th>
+        <th>${esc(home)}</th>
+      </tr></thead><tbody>`;
+
+    for (const [book, v] of spreadEntries) {
+      const aBest = v.away_pt === bestAway;
+      const hBest = v.home_pt === bestHome;
+      html += `<tr>
+        <td class="book">${esc(book)}</td>
+        <td class="num ${aBest ? 'best' : ''}">
+          ${fmtSpread(v.away_pt)} (${v.away_px || '—'})
+          ${aBest ? '<span class="best-tag">Best</span>' : ''}
+        </td>
+        <td class="num ${hBest ? 'best' : ''}">
+          ${fmtSpread(v.home_pt)} (${v.home_px || '—'})
+          ${hBest ? '<span class="best-tag">Best</span>' : ''}
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="no-lines">No spread lines posted yet.</div>';
+  }
+  html += '</div>';
+
+  // ── Totals ─────────────────────────────────────────────────────────────────
+  html += '<div class="odds-section"><div class="section-title">Totals — Over / Under</div>';
+
+  const totalEntries = Object.entries(totals);
+  if (totalEntries.length) {
+    const pts       = totalEntries.map(([,v]) => v.total);
+    const bestOver  = Math.min(...pts);   // lower total = better for over bettors
+    const bestUnder = Math.max(...pts);   // higher total = better for under bettors
+
+    totalEntries.sort((a, b) => a[1].total - b[1].total);
+
+    html += `<table class="lines">
+      <thead><tr>
+        <th>Book</th>
+        <th>Total</th>
+        <th>Over</th>
+        <th>Under</th>
+      </tr></thead><tbody>`;
+
+    for (const [book, v] of totalEntries) {
+      const oBest = v.total === bestOver;
+      const uBest = v.total === bestUnder;
+      html += `<tr>
+        <td class="book">${esc(book)}</td>
+        <td class="num ${oBest || uBest ? 'best' : ''}">
+          ${v.total}
+          ${oBest ? '<span class="best-tag">Best Over</span>'  : ''}
+          ${uBest ? '<span class="best-tag">Best Under</span>' : ''}
+        </td>
+        <td class="num">${v.over_px  || '—'}</td>
+        <td class="num">${v.under_px || '—'}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="no-lines">No totals posted yet.</div>';
+  }
+  html += '</div>';
+
+  panel.innerHTML = html;
+}
+
+// ── Event delegation for game cards ──────────────────────────────────────────
+document.getElementById('gamesList').addEventListener('click', e => {
+  const card = e.target.closest('.game-card');
+  if (!card) return;
+  loadOdds(
+    Number(card.dataset.id),
+    card.dataset.away,
+    card.dataset.home,
+    card.dataset.league,
+    card.dataset.date
+  );
+});
+
+// ── Filter buttons ────────────────────────────────────────────────────────────
+document.getElementById('filters').addEventListener('click', e => {
+  if (!e.target.classList.contains('filter-btn')) return;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  e.target.classList.add('active');
+  activeFilter = e.target.dataset.sport;
+  renderGames();
+});
+
+// ── Search input ──────────────────────────────────────────────────────────────
+document.getElementById('search').addEventListener('input', renderGames);
+
+// ── Initial load ──────────────────────────────────────────────────────────────
+fetch('/api/games')
+  .then(r => r.json())
+  .then(data => {
+    allGames = data;
+    renderGames();
+  })
+  .catch(() => {
+    document.getElementById('gamesList').innerHTML =
+      '<div class="empty-state">Could not load games.<br/>Check your API key.</div>';
+  });
+</script>
+</body>
+</html>

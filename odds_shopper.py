@@ -1,528 +1,330 @@
 #!/usr/bin/env python3
 """
-Odds Shopper v2 — powered by odds-api.io
-Free tier: 100 req/hour, no monthly cap, email signup only.
-Books: DraftKings, FanDuel, BetMGM, Caesars, bet365, Fanatics, BetRivers, Hard Rock
+Odds Shopper — CLI version
+Data: ActionNetwork public API (free, no key needed)
+Books: FanDuel, DraftKings, BetMGM, Caesars, bet365, ESPN Bet, BetRivers
 
 Usage:
-  python odds_shopper.py                  # interactive mode
-  python odds_shopper.py "Alabama"        # one-shot search
-  python odds_shopper.py --list           # list all live/upcoming games
-  python odds_shopper.py --list-all       # list including non-US leagues
-  python odds_shopper.py --debug "Chiefs" # show raw API response
+  python odds_shopper.py                  # interactive
+  python odds_shopper.py "Chiefs"         # one-shot search
+  python odds_shopper.py --list           # list all upcoming games
 """
 
-import os
 import sys
-import json
 import time
-import hashlib
 import requests
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from dotenv import load_dotenv
 
-load_dotenv()
+BASE_URL = "https://api.actionnetwork.com/web/v2/scoreboard"
 
-API_KEY  = os.getenv("ODDS_API_KEY", "").strip()
-BASE_URL = "https://api.odds-api.io/v3"
+BOOKS = {
+    15:  "FanDuel",
+    30:  "DraftKings",
+    49:  "BetMGM",
+    68:  "Caesars",
+    69:  "bet365",
+    71:  "ESPN Bet",
+    75:  "BetRivers",
+}
 
-# Local disk cache — avoids redundant calls within the window
-CACHE_DIR = Path(__file__).parent / ".cache"
-CACHE_DIR.mkdir(exist_ok=True)
-EVENTS_CACHE_MINUTES = 10
-ODDS_CACHE_MINUTES   = 5
-
-# US books to show (exact names from the /bookmakers endpoint)
-US_BOOKS = [
-    "DraftKings",
-    "FanDuel",
-    "BetMGM",
-    "Caesars",
-    "bet365",
-    "Fanatics",
-    "BetRivers",
-    "Hard Rock",
-]
-
-# Sport slugs to query
-SPORT_SLUGS = [
-    "american-football",
-    "basketball",
-    "baseball",
-    "ice-hockey",
-]
-
-# Keywords that identify US major league events (checked against league name + slug)
-US_LEAGUE_KEYWORDS = [
-    "nfl", "ncaaf", "ncaa", "college",
-    "nba", "mlb", "nhl",
-    "national football", "national basketball",
-    "major league", "national hockey",
-]
-
-
-# ---------------------------------------------------------------------------
-# Cache helpers
-# ---------------------------------------------------------------------------
-
-def _cache_path(key: str) -> Path:
-    return CACHE_DIR / (hashlib.md5(key.encode()).hexdigest() + ".json")
-
-
-def cache_get(key: str, max_age_minutes: int):
-    p = _cache_path(key)
-    if not p.exists():
-        return None
-    age = time.time() - p.stat().st_mtime
-    if age > max_age_minutes * 60:
-        return None
-    return json.loads(p.read_text())
-
-
-def cache_set(key: str, data):
-    _cache_path(key).write_text(json.dumps(data))
-
-
-# ---------------------------------------------------------------------------
-# API client
-# ---------------------------------------------------------------------------
+SPORTS = {
+    "nfl":   "NFL",
+    "ncaaf": "NCAAF",
+    "nba":   "NBA",
+    "ncaab": "NCAAB",
+    "mlb":   "MLB",
+    "nhl":   "NHL",
+}
 
 SESSION = requests.Session()
-SESSION.headers.update({"User-Agent": "OddsShopper/2.0"})
+SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Referer": "https://www.actionnetwork.com/",
+})
+
+_CACHE: dict = {}
+CACHE_TTL = 300
 
 
-def api_get(path: str, params: dict, cache_minutes: int = 0, debug: bool = False):
-    params["apiKey"] = API_KEY
-    cache_key = path + json.dumps(params, sort_keys=True)
+def cache_get(key):
+    e = _CACHE.get(key)
+    if e and (time.time() - e[1]) < CACHE_TTL:
+        return e[0]
+    return None
 
-    if cache_minutes:
-        cached = cache_get(cache_key, cache_minutes)
-        if cached is not None:
-            return cached
 
-    url = BASE_URL + path
-    resp = SESSION.get(url, params=params, timeout=15)
+def cache_set(key, data):
+    _CACHE[key] = (data, time.time())
 
-    if debug:
-        print(f"\n[DEBUG] GET {resp.url}")
-        print(f"[DEBUG] Status: {resp.status_code}")
-        try:
-            print(json.dumps(resp.json(), indent=2)[:3000])
-        except Exception:
-            print(resp.text[:3000])
 
+def fetch_sport(slug):
+    cached = cache_get(slug)
+    if cached is not None:
+        return cached
+
+    resp = SESSION.get(f"{BASE_URL}/{slug}", timeout=15)
     resp.raise_for_status()
-    data = resp.json()
+    data  = resp.json()
+    games = data.get("games") or []
+    result = []
+    now_ts = time.time()
 
-    if cache_minutes:
-        cache_set(cache_key, data)
-
-    return data
-
-
-# ---------------------------------------------------------------------------
-# Odds conversion: decimal → American
-# ---------------------------------------------------------------------------
-
-def to_american(decimal_str) -> str:
-    if decimal_str is None:
-        return "  —  "
-    try:
-        d = float(decimal_str)
-        if d <= 1.0:
-            return "  —  "
-        if d >= 2.0:
-            val = int(round((d - 1) * 100))
-            return f"+{val}"
-        else:
-            val = int(round(-100 / (d - 1)))
-            return str(val)
-    except (ValueError, ZeroDivisionError):
-        return "  —  "
-
-
-def fmt_spread(point) -> str:
-    if point is None:
-        return "  —  "
-    try:
-        p = float(point)
-        return f"+{p}" if p > 0 else str(p)
-    except (ValueError, TypeError):
-        return str(point)
-
-
-# ---------------------------------------------------------------------------
-# Load events
-# ---------------------------------------------------------------------------
-
-def load_events(debug: bool = False) -> list:
-    all_events = []
-    now = datetime.now(timezone.utc)
-    week_out = now + timedelta(days=8)
-
-    for slug in SPORT_SLUGS:
-        params = {
-            "sport":  slug,
-            "status": "pending,live",
-            "from":   now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "to":     week_out.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "limit":  200,
-        }
+    for g in games:
+        if g.get("status") in ("final", "cancelled", "postponed"):
+            continue
+        start_str = g.get("start_time") or ""
         try:
-            events = api_get("/events", params, cache_minutes=EVENTS_CACHE_MINUTES, debug=debug)
-            for e in events:
-                e["_sport_slug"] = slug
-            all_events.extend(events)
-        except requests.HTTPError as ex:
-            print(f"  Warning: could not load {slug} ({ex})")
-        except Exception as ex:
-            print(f"  Warning: {slug} error — {ex}")
+            dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            if (now_ts - dt.timestamp()) > 14400:
+                continue
+        except Exception:
+            pass
+        teams    = {t["id"]: t for t in (g.get("teams") or [])}
+        away_id  = g.get("away_team_id")
+        home_id  = g.get("home_team_id")
+        result.append({
+            "id":      g["id"],
+            "sport":   SPORTS.get(slug, slug.upper()),
+            "away":    teams.get(away_id, {}).get("full_name", "Away"),
+            "home":    teams.get(home_id, {}).get("full_name", "Home"),
+            "date":    start_str,
+            "status":  g.get("status", ""),
+            "markets": g.get("markets") or {},
+        })
 
-    return all_events
-
-
-def is_us_major(event: dict) -> bool:
-    league = event.get("league") or {}
-    name   = (league.get("name") or "").lower()
-    slug   = (league.get("slug") or "").lower()
-    return any(kw in name or kw in slug for kw in US_LEAGUE_KEYWORDS)
-
-
-def sport_label(event: dict) -> str:
-    league = event.get("league") or {}
-    return (league.get("name") or event.get("_sport_slug") or "").upper()
-
-
-# ---------------------------------------------------------------------------
-# Game search
-# ---------------------------------------------------------------------------
-
-def similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
-
-
-def find_games(events: list, query: str) -> list:
-    q = query.lower().strip()
-    scored = []
-    for e in events:
-        home = e.get("home", "")
-        away = e.get("away", "")
-        candidates = [
-            home, away,
-            f"{away} {home}",
-            f"{home} {away}",
-            *home.split(),
-            *away.split(),
-        ]
-        score = max((similarity(q, c) for c in candidates), default=0)
-        if any(q in c.lower() for c in candidates):
-            score = max(score, 0.88)
-        if score >= 0.55:
-            scored.append((score, e))
-
-    scored.sort(key=lambda x: -x[0])
-    seen, result = set(), []
-    for _, e in scored:
-        eid = e.get("id")
-        if eid not in seen:
-            seen.add(eid)
-            result.append(e)
+    cache_set(slug, result)
     return result
 
 
-# ---------------------------------------------------------------------------
-# Fetch and parse odds
-# ---------------------------------------------------------------------------
+def load_all():
+    all_games = []
+    for slug in SPORTS:
+        try:
+            all_games.extend(fetch_sport(slug))
+        except Exception as ex:
+            print(f"  Warning: {slug} — {ex}")
+    all_games.sort(key=lambda g: g["date"])
+    return all_games
 
-def fetch_odds(event_id, debug: bool = False) -> dict:
-    params = {
-        "eventId":    event_id,
-        "bookmakers": ",".join(US_BOOKS),
-    }
-    return api_get("/odds", params, cache_minutes=ODDS_CACHE_MINUTES, debug=debug)
 
+def parse_odds(game):
+    markets = game.get("markets") or {}
+    spreads: dict = {}
+    totals:  dict = {}
 
-def parse_odds(data: dict) -> tuple:
-    """Returns (spreads, totals) where each is a list of dicts per book."""
-    spreads = {}   # book -> {home_pt, home_px, away_pt, away_px}
-    totals  = {}   # book -> {total, over_px, under_px}
+    def fmt(v):
+        if v is None:
+            return None
+        return f"+{v}" if v > 0 else str(v)
 
-    bookmakers = data.get("bookmakers") or {}
+    def add_spread(bname, side, val, odds):
+        if bname not in spreads:
+            spreads[bname] = {"away_pt": None, "away_px": None,
+                              "home_pt": None, "home_px": None}
+        if side in ("away", "road"):
+            spreads[bname]["away_pt"] = val
+            spreads[bname]["away_px"] = fmt(odds)
+        elif side == "home":
+            spreads[bname]["home_pt"] = val
+            spreads[bname]["home_px"] = fmt(odds)
 
-    for book, markets in bookmakers.items():
-        if not isinstance(markets, list):
-            continue
-        for mkt in markets:
-            mkt_name  = (mkt.get("name") or "").lower()
-            odds_list = mkt.get("odds") or []
+    def add_total(bname, side, val, odds):
+        if bname not in totals:
+            totals[bname] = {"total": None, "over_px": None, "under_px": None}
+        totals[bname]["total"] = val
+        if side == "over":
+            totals[bname]["over_px"] = fmt(odds)
+        elif side == "under":
+            totals[bname]["under_px"] = fmt(odds)
 
-            # --- Spreads: look for hdp field ---
-            if any(kw in mkt_name for kw in ["handicap", "spread", "asian"]):
-                for odds in odds_list:
-                    hdp = odds.get("hdp")
-                    if hdp is None:
-                        continue
-                    home_px = odds.get("home")
-                    away_px = odds.get("away")
-                    if home_px or away_px:
-                        spreads[book] = {
-                            "home_pt": float(hdp),
-                            "home_px": to_american(home_px),
-                            "away_pt": -float(hdp),
-                            "away_px": to_american(away_px),
-                        }
-                        break  # take first entry per book
-
-            # --- Totals: look for over/under fields ---
-            elif any(kw in mkt_name for kw in ["over", "under", "total"]):
-                for odds in odds_list:
-                    over_px  = odds.get("over")
-                    under_px = odds.get("under")
-                    hdp      = odds.get("hdp")
-                    if (over_px or under_px) and hdp is not None:
-                        totals[book] = {
-                            "total":    float(hdp),
-                            "over_px":  to_american(over_px),
-                            "under_px": to_american(under_px),
-                        }
-                        break
-
-    # Fallback: if market names didn't match, scan all markets for hdp + over/under
-    if not spreads and not totals:
-        for book, markets in bookmakers.items():
-            if not isinstance(markets, list):
+    if markets and isinstance(next(iter(markets.values()), None), dict):
+        for bid_str, bdata in markets.items():
+            try:
+                bid = int(bid_str)
+            except ValueError:
                 continue
-            for mkt in markets:
-                for odds in (mkt.get("odds") or []):
-                    hdp = odds.get("hdp")
-                    if hdp is None:
-                        continue
-                    over_px  = odds.get("over")
-                    under_px = odds.get("under")
-                    home_px  = odds.get("home")
-                    away_px  = odds.get("away")
-                    if (over_px or under_px) and book not in totals:
-                        totals[book] = {
-                            "total": float(hdp),
-                            "over_px":  to_american(over_px),
-                            "under_px": to_american(under_px),
-                        }
-                    elif (home_px or away_px) and book not in spreads:
-                        spreads[book] = {
-                            "home_pt": float(hdp),
-                            "home_px": to_american(home_px),
-                            "away_pt": -float(hdp),
-                            "away_px": to_american(away_px),
-                        }
+            if bid not in BOOKS:
+                continue
+            bname = BOOKS[bid]
+            event = bdata.get("event") or bdata
+            for o in (event.get("spread") or []):
+                add_spread(bname, o.get("side",""), o.get("value"), o.get("odds"))
+            for o in (event.get("total") or []):
+                add_total(bname, o.get("side",""), o.get("value"), o.get("odds"))
+    elif isinstance(markets, list):
+        for o in markets:
+            bid = o.get("book_id")
+            if bid not in BOOKS:
+                continue
+            bname = BOOKS[bid]
+            t = o.get("type","")
+            if o.get("period","event") not in ("event","game","full"):
+                continue
+            if t == "spread":
+                add_spread(bname, o.get("side",""), o.get("value"), o.get("odds"))
+            elif t == "total":
+                add_total(bname, o.get("side",""), o.get("value"), o.get("odds"))
 
+    spreads = {b: v for b, v in spreads.items()
+               if v["away_pt"] is not None and v["home_pt"] is not None}
+    totals  = {b: v for b, v in totals.items() if v["total"] is not None}
     return spreads, totals
 
 
-# ---------------------------------------------------------------------------
-# Display
-# ---------------------------------------------------------------------------
+def similarity(a, b):
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
-def fmt_time(iso_str: str) -> str:
+
+def find_games(games, query):
+    q = query.lower()
+    scored = []
+    for g in games:
+        targets = [g["home"], g["away"], f"{g['away']} {g['home']}",
+                   *g["home"].split(), *g["away"].split()]
+        score = max((similarity(q, t) for t in targets), default=0)
+        if any(q in t.lower() for t in targets):
+            score = max(score, 0.88)
+        if score >= 0.55:
+            scored.append((score, g))
+    scored.sort(key=lambda x: -x[0])
+    seen, result = set(), []
+    for _, g in scored:
+        if g["id"] not in seen:
+            seen.add(g["id"])
+            result.append(g)
+    return result
+
+
+def fmt_time(iso):
     try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00")).astimezone()
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
         return dt.strftime("%a %b %d  %I:%M %p")
     except Exception:
-        return iso_str
+        return iso
 
 
-def display_game(event: dict, debug: bool = False):
-    home  = event.get("home", "?")
-    away  = event.get("away", "?")
-    label = sport_label(event)
-    gtime = fmt_time(event.get("date", ""))
-    eid   = event.get("id")
+def fmt_pt(pt):
+    if pt is None:
+        return "—"
+    return f"+{pt}" if pt > 0 else str(pt)
+
+
+def display_game(game):
+    away  = game["away"]
+    home  = game["home"]
+    sport = game["sport"]
+    gtime = fmt_time(game["date"])
+
+    spreads, totals = parse_odds(game)
 
     print()
-    print("=" * 70)
+    print("=" * 68)
     print(f"  {away}  @  {home}")
-    print(f"  {label}  |  {gtime}")
-    print("=" * 70)
+    print(f"  {sport}  |  {gtime}")
+    print("=" * 68)
 
-    try:
-        raw = fetch_odds(eid, debug=debug)
-    except Exception as ex:
-        print(f"\n  Could not load odds: {ex}\n")
-        return
-
-    spreads, totals = parse_odds(raw)
-
-    # ---------- SPREADS ----------
     if spreads:
-        print(f"\n  POINT SPREADS")
-        aw = away[:16]
-        hw = home[:16]
-        print(f"  {'Book':<22}  {aw:<20}  {hw}")
-        print(f"  {'-'*64}")
-
-        rows = sorted(spreads.items(), key=lambda kv: kv[1]["away_pt"], reverse=True)
-        away_pts = [v["away_pt"] for v in spreads.values()]
-        home_pts = [v["home_pt"] for v in spreads.values()]
+        print(f"\n  SPREADS")
+        away_pts  = [v["away_pt"] for v in spreads.values() if v["away_pt"] is not None]
+        home_pts  = [v["home_pt"] for v in spreads.values() if v["home_pt"] is not None]
         best_away = max(away_pts) if away_pts else None
         best_home = max(home_pts) if home_pts else None
 
+        rows = sorted(spreads.items(), key=lambda kv: -(kv[1]["away_pt"] or 0))
+        aw = away[:14]
+        hw = home[:14]
+        print(f"  {'Book':<20}  {aw:<18}  {hw}")
+        print(f"  {'-'*60}")
         for book, v in rows:
-            a_str = f"{fmt_spread(v['away_pt'])} ({v['away_px']})"
-            h_str = f"{fmt_spread(v['home_pt'])} ({v['home_px']})"
+            a_str = f"{fmt_pt(v['away_pt'])} ({v['away_px'] or '—'})"
+            h_str = f"{fmt_pt(v['home_pt'])} ({v['home_px'] or '—'})"
             flag  = ""
             if v["away_pt"] == best_away:
                 flag = "  <-- BEST AWAY"
             elif v["home_pt"] == best_home:
                 flag = "  <-- BEST HOME"
-            print(f"  {book:<22}  {a_str:<20}  {h_str}{flag}")
+            print(f"  {book:<20}  {a_str:<18}  {h_str}{flag}")
 
-    # ---------- TOTALS ----------
     if totals:
-        print(f"\n  TOTALS  (Over / Under)")
-        print(f"  {'Book':<22}  {'Total':>7}  {'Over':>8}  {'Under':>8}")
-        print(f"  {'-'*54}")
+        print(f"\n  TOTALS")
+        pts        = [v["total"] for v in totals.values() if v["total"] is not None]
+        best_over  = min(pts) if pts else None
+        best_under = max(pts) if pts else None
 
-        rows = sorted(totals.items(), key=lambda kv: kv[1]["total"])
-        total_pts = [v["total"] for v in totals.values()]
-        best_over  = min(total_pts) if total_pts else None
-        best_under = max(total_pts) if total_pts else None
-
+        rows = sorted(totals.items(), key=lambda kv: kv[1]["total"] or 0)
+        print(f"  {'Book':<20}  {'Total':>7}  {'Over':>8}  {'Under':>8}")
+        print(f"  {'-'*52}")
         for book, v in rows:
             flag = ""
             if v["total"] == best_over:
                 flag = "  <-- BEST OVER"
             elif v["total"] == best_under:
                 flag = "  <-- BEST UNDER"
-            print(f"  {book:<22}  {fmt_spread(v['total']):>7}  "
-                  f"{v['over_px']:>8}  {v['under_px']:>8}{flag}")
+            print(f"  {book:<20}  {fmt_pt(v['total']):>7}  "
+                  f"{v['over_px'] or '—':>8}  {v['under_px'] or '—':>8}{flag}")
 
     if not spreads and not totals:
-        print("\n  No spread or total odds posted yet.")
-        if not debug:
-            print("  Run with --debug to see raw API response.\n")
+        print("\n  No lines posted yet for this game.")
 
     print()
 
-
-def list_games(events: list, us_only: bool = True):
-    filtered = [e for e in events if not us_only or is_us_major(e)]
-    if not filtered:
-        print("  No games found." + (" Try --list-all to include non-US leagues." if us_only else ""))
-        return
-    by_league: dict = {}
-    for e in filtered:
-        label = sport_label(e)
-        by_league.setdefault(label, []).append(e)
-    for label, games in sorted(by_league.items()):
-        print(f"\n  [{label}]")
-        for g in games:
-            t = fmt_time(g.get("date", ""))
-            print(f"    {g['away']}  @  {g['home']}   —   {t}")
-    print()
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
-    if not API_KEY:
-        print("\nERROR: ODDS_API_KEY not set.")
-        print("  1. Sign up free (email only) at: https://odds-api.io")
-        print("  2. Copy .env.example to .env in this folder")
-        print("  3. Paste your key:  ODDS_API_KEY=your_key_here\n")
-        sys.exit(1)
+    args   = sys.argv[1:]
+    print("\nOdds Shopper — loading from ActionNetwork (free, no key needed)...")
+    games  = load_all()
+    print(f"  {len(games)} upcoming games loaded.\n")
 
-    args = sys.argv[1:]
-    debug = "--debug" in args
-    args  = [a for a in args if a != "--debug"]
-
-    print("\nOdds Shopper — loading games...")
-    events = load_events(debug=debug)
-    us_events = [e for e in events if is_us_major(e)]
-    print(f"  {len(us_events)} US major league games loaded ({len(events)} total).\n")
-
-    # One-shot modes
     if args:
-        cmd = args[0].lower()
-
-        if cmd == "--list-all":
-            list_games(events, us_only=False)
+        if args[0] == "--list":
+            for g in games:
+                print(f"  [{g['sport']}]  {g['away']}  @  {g['home']}  —  {fmt_time(g['date'])}")
             return
-
-        if cmd == "--list":
-            list_games(us_events, us_only=True)
-            return
-
-        query   = " ".join(args)
-        results = find_games(us_events, query)
+        results = find_games(games, " ".join(args))
         if not results:
-            print(f"  No games found for '{query}'. Try --list to see all games.")
+            print(f"  No games found. Try --list to see all games.")
         for g in results[:3]:
-            display_game(g, debug=debug)
+            display_game(g)
         return
 
-    # Interactive mode
-    print("Type a team name or matchup — I'll find the best line.")
-    print("Commands:  list  |  list-all  |  reload  |  quit\n")
-
+    print("Type a team or matchup. Commands: list | reload | quit\n")
     while True:
         try:
             raw = input("Search: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print()
             break
-
         if not raw:
             continue
-
-        cmd = raw.lower()
-
-        if cmd in ("quit", "exit", "q"):
+        if raw.lower() in ("quit", "q", "exit"):
             break
-
-        if cmd == "list-all":
-            list_games(events, us_only=False)
+        if raw.lower() == "list":
+            for g in games:
+                print(f"  [{g['sport']}]  {g['away']}  @  {g['home']}  —  {fmt_time(g['date'])}")
             continue
-
-        if cmd in ("list", "ls"):
-            list_games(us_events, us_only=True)
+        if raw.lower() in ("reload", "refresh"):
+            _CACHE.clear()
+            games = load_all()
+            print(f"  Reloaded — {len(games)} games.\n")
             continue
-
-        if cmd in ("reload", "refresh"):
-            # Clear event caches and reload
-            for f in CACHE_DIR.glob("*.json"):
-                f.unlink()
-            print("Cache cleared — reloading...")
-            events    = load_events(debug=debug)
-            us_events = [e for e in events if is_us_major(e)]
-            print(f"  {len(us_events)} US games loaded.\n")
-            continue
-
-        results = find_games(us_events, raw)
+        results = find_games(games, raw)
         if not results:
-            print(f"  No match for '{raw}'. Type 'list' to browse all games.\n")
+            print(f"  No match for '{raw}'. Type 'list' to browse.\n")
             continue
-
-        if len(results) == 1:
-            display_game(results[0], debug=debug)
-        else:
-            print(f"\n  Found {len(results)} games:\n")
+        if len(results) > 1:
+            print(f"\n  Found {len(results)} games:")
             for i, g in enumerate(results[:5], 1):
-                t = fmt_time(g.get("date", ""))
-                print(f"  [{i}] {sport_label(g):<12}  {g['away']}  @  {g['home']}   {t}")
-            print()
+                print(f"  [{i}] {g['sport']:<8} {g['away']}  @  {g['home']}")
             try:
-                pick = input("  Pick a number (or Enter for all): ").strip()
+                pick = input("  Pick number (or Enter for top result): ").strip()
             except (EOFError, KeyboardInterrupt):
-                print()
                 break
-            if pick.isdigit() and 1 <= int(pick) <= len(results[:5]):
-                display_game(results[int(pick) - 1], debug=debug)
+            if pick.isdigit() and 1 <= int(pick) <= min(5, len(results)):
+                display_game(results[int(pick)-1])
             else:
-                for g in results[:3]:
-                    display_game(g, debug=debug)
+                display_game(results[0])
+        else:
+            display_game(results[0])
 
 
 if __name__ == "__main__":

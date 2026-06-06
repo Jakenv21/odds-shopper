@@ -23,7 +23,7 @@ BOOKS = {
     49:  "BetMGM",
     68:  "Caesars",
     69:  "bet365",
-    71:  "ESPN Bet",
+    71:  "theScore",
     75:  "BetRivers",
 }
 

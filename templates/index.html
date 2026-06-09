@@ -425,7 +425,7 @@ table.lines tr:hover td { background: #161b22; }
 </div>
 
 <div class="footer">
-  Odds Shopper &nbsp;·&nbsp; Data via odds-api.io &nbsp;·&nbsp; Lines refresh every 5 minutes
+  Odds Shopper &nbsp;·&nbsp; Data via The Odds API (real-time) &nbsp;·&nbsp; Lines refresh every 30 min
 </div>
 
 <script>
@@ -478,7 +478,7 @@ function renderGames() {
   const lbl = document.getElementById('gamesLabel');
 
   const filtered = allGames.filter(g => {
-    const code = leagueCode(g.league);
+    const code = leagueCode(g.sport);
     const sport_ok = (activeFilter === 'ALL') || (code === activeFilter);
     const search_ok = !q ||
       g.home.toLowerCase().includes(q) ||
@@ -498,7 +498,7 @@ function renderGames() {
          data-id="${g.id}"
          data-home="${esc(g.home)}"
          data-away="${esc(g.away)}"
-         data-league="${esc(g.league)}"
+         data-league="${esc(g.sport)}"
          data-date="${esc(g.date)}">
       <div class="game-teams">
         ${esc(g.away)} <span class="vs">@</span> ${esc(g.home)}
@@ -683,7 +683,7 @@ document.getElementById('gamesList').addEventListener('click', e => {
   const card = e.target.closest('.game-card');
   if (!card) return;
   loadOdds(
-    Number(card.dataset.id),
+    card.dataset.id,
     card.dataset.away,
     card.dataset.home,
     card.dataset.league,

@@ -5,8 +5,7 @@ Data sources (auto-selected):
   • The Odds API  — real-time, set ODDS_API_KEY in .env or Render env vars
   • ActionNetwork — free fallback (~15-30 min delay), no key needed
 
-Books (The Odds API): FanDuel, DraftKings, BetMGM, Caesars, bet365,
-                      BetRivers, Hard Rock, ESPN Bet, PointsBet
+Books (The Odds API): FanDuel, DraftKings, BetMGM, BetRivers, Hard Rock, ESPN Bet
 Books (ActionNetwork): FanDuel, DraftKings, BetMGM, Caesars, bet365,
                        theScore, BetRivers
 """
@@ -14,6 +13,7 @@ Books (ActionNetwork): FanDuel, DraftKings, BetMGM, Caesars, bet365,
 import os
 import time
 import requests
+from collections import Counter
 from datetime import datetime, timezone
 from flask import Flask, render_template, jsonify, abort
 from dotenv import load_dotenv
@@ -49,15 +49,12 @@ AN_SPORTS = {
 # The Odds API
 OA_BASE  = "https://api.the-odds-api.com/v4/sports"
 OA_BOOKS = {
-    "fanduel":        "FanDuel",
-    "draftkings":     "DraftKings",
-    "betmgm":         "BetMGM",
-    "williamhill_us": "Caesars",
-    "bet365":         "bet365",
-    "betrivers":      "BetRivers",
-    "hardrockbet":    "Hard Rock",
-    "espnbet":        "ESPN Bet",
-    "pointsbetus":    "PointsBet",
+    "fanduel":     "FanDuel",
+    "draftkings":  "DraftKings",
+    "betmgm":      "BetMGM",
+    "betrivers":   "BetRivers",
+    "hardrockbet": "Hard Rock",
+    "espnbet":     "ESPN Bet",
 }
 OA_BOOK_KEYS = ",".join(OA_BOOKS.keys())
 OA_SPORTS = {
@@ -217,14 +214,16 @@ def parse_odds(game: dict) -> dict:
 
     def add_spread(bname, side, value, odds):
         if bname not in spreads:
-            spreads[bname] = {"away_pt": None, "away_px": None,
-                              "home_pt": None, "home_px": None}
+            spreads[bname] = {"away_pt": None, "away_px": None, "away_raw": None,
+                              "home_pt": None, "home_px": None, "home_raw": None}
         if side in ("away", "road"):
             spreads[bname]["away_pt"] = value
             spreads[bname]["away_px"] = fmt(odds)
+            spreads[bname]["away_raw"] = odds
         elif side == "home":
             spreads[bname]["home_pt"] = value
             spreads[bname]["home_px"] = fmt(odds)
+            spreads[bname]["home_raw"] = odds
 
     def add_total(bname, side, value, odds):
         if bname not in totals:
@@ -331,16 +330,22 @@ def parse_odds(game: dict) -> dict:
             "raw": best_odds, "others": others,
         })
 
-    for side_label, pt_key, px_key in [
-        (f"{away} Spread", "away_pt", "away_px"),
-        (f"{home} Spread", "home_pt", "home_px"),
+    for side_label, pt_key, px_key, raw_key in [
+        (f"{away} Spread", "away_pt", "away_px", "away_raw"),
+        (f"{home} Spread", "home_pt", "home_px", "home_raw"),
     ]:
-        entries = [(b, v[pt_key], v[px_key]) for b, v in spreads.items() if v[pt_key] is not None]
+        entries = [(b, v[pt_key], v[px_key], v.get(raw_key))
+                   for b, v in spreads.items() if v[pt_key] is not None]
         if not entries:
             continue
-        entries.sort(key=lambda x: -x[1])
-        best_book, best_pt, best_px = entries[0]
-        others = [{"book": b, "odds": f"{pt} ({px})"} for b, pt, px in entries[1:]]
+        # Use consensus line to avoid alternate lines skewing the result,
+        # then pick best price at that line.
+        consensus_pt = Counter(e[1] for e in entries).most_common(1)[0][0]
+        consensus = [(b, pt, px, raw) for b, pt, px, raw in entries if pt == consensus_pt]
+        consensus.sort(key=lambda x: -(x[3] if x[3] is not None else -9999))
+        best_book, best_pt, best_px, _ = consensus[0]
+        others = [{"book": b, "odds": f"{'+' if pt > 0 else ''}{pt} ({px})"}
+                  for b, pt, px, _ in consensus[1:]]
         best_bets.append({
             "type": "spread", "label": side_label,
             "book": best_book,

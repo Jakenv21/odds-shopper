@@ -34,7 +34,7 @@ AN_BOOKS = {
     49: "BetMGM",
     68: "Caesars",
     69: "bet365",
-    71: "theScore",
+    71: "ESPN Bet",
     75: "BetRivers",
 }
 AN_SPORTS = {

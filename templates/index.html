@@ -613,17 +613,21 @@ function renderOdds(data, away, home, league, date) {
   html += '<div class="odds-section"><div class="section-title">Point Spreads</div>';
   const spreadEntries = Object.entries(spreads);
   if (spreadEntries.length) {
-    const bestAway = Math.max(...spreadEntries.map(([,v]) => v.away_pt));
-    const bestHome = Math.max(...spreadEntries.map(([,v]) => v.home_pt));
-    spreadEntries.sort((a, b) => b[1].away_pt - a[1].away_pt);
+    const parseOdds = px => px ? parseInt(px.replace('+', '')) : -9999;
+    // Best = most favorable point; if tied, best price (least juice)
+    const bestAwayPt = Math.max(...spreadEntries.map(([,v]) => v.away_pt));
+    const bestHomePt = Math.max(...spreadEntries.map(([,v]) => v.home_pt));
+    const bestAwayPx = Math.max(...spreadEntries.filter(([,v]) => v.away_pt === bestAwayPt).map(([,v]) => parseOdds(v.away_px)));
+    const bestHomePx = Math.max(...spreadEntries.filter(([,v]) => v.home_pt === bestHomePt).map(([,v]) => parseOdds(v.home_px)));
+    spreadEntries.sort((a, b) => b[1].away_pt - a[1].away_pt || parseOdds(b[1].away_px) - parseOdds(a[1].away_px));
 
     html += `<table class="lines"><thead><tr>
       <th>Book</th><th>${esc(away)}</th><th>${esc(home)}</th>
     </tr></thead><tbody>`;
 
     for (const [book, v] of spreadEntries) {
-      const aBest = v.away_pt === bestAway;
-      const hBest = v.home_pt === bestHome;
+      const aBest = v.away_pt === bestAwayPt && parseOdds(v.away_px) === bestAwayPx;
+      const hBest = v.home_pt === bestHomePt && parseOdds(v.home_px) === bestHomePx;
       html += `<tr>
         <td class="book">${esc(book)}</td>
         <td class="num ${aBest ? 'best' : ''}">
@@ -646,9 +650,12 @@ function renderOdds(data, away, home, league, date) {
   html += '<div class="odds-section"><div class="section-title">Totals — Over / Under</div>';
   const totalEntries = Object.entries(totals);
   if (totalEntries.length) {
-    const pts       = totalEntries.map(([,v]) => v.total);
-    const bestOver  = Math.min(...pts);
-    const bestUnder = Math.max(...pts);
+    const parseOdds = px => px ? parseInt(px.replace('+', '')) : -9999;
+    const pts        = totalEntries.map(([,v]) => v.total);
+    const bestOverPt  = Math.min(...pts);
+    const bestUnderPt = Math.max(...pts);
+    const bestOverPx  = Math.max(...totalEntries.filter(([,v]) => v.total === bestOverPt).map(([,v])  => parseOdds(v.over_px)));
+    const bestUnderPx = Math.max(...totalEntries.filter(([,v]) => v.total === bestUnderPt).map(([,v]) => parseOdds(v.under_px)));
     totalEntries.sort((a, b) => a[1].total - b[1].total);
 
     html += `<table class="lines"><thead><tr>
@@ -656,8 +663,8 @@ function renderOdds(data, away, home, league, date) {
     </tr></thead><tbody>`;
 
     for (const [book, v] of totalEntries) {
-      const oBest = v.total === bestOver;
-      const uBest = v.total === bestUnder;
+      const oBest = v.total === bestOverPt  && parseOdds(v.over_px)  === bestOverPx;
+      const uBest = v.total === bestUnderPt && parseOdds(v.under_px) === bestUnderPx;
       html += `<tr>
         <td class="book">${esc(book)}</td>
         <td class="num ${oBest || uBest ? 'best' : ''}">
@@ -665,8 +672,8 @@ function renderOdds(data, away, home, league, date) {
           ${oBest ? '<span class="best-tag">Best Over</span>'  : ''}
           ${uBest ? '<span class="best-tag">Best Under</span>' : ''}
         </td>
-        <td class="num">${v.over_px  || '—'}</td>
-        <td class="num">${v.under_px || '—'}</td>
+        <td class="num ${oBest ? 'best' : ''}">${v.over_px  || '—'}</td>
+        <td class="num ${uBest ? 'best' : ''}">${v.under_px || '—'}</td>
       </tr>`;
     }
     html += '</tbody></table>';

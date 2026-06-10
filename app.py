@@ -407,7 +407,11 @@ def parse_odds(game: dict) -> dict:
         total_entries = [(b, v["total"], v["over_px"], v["under_px"])
                          for b, v in totals.items() if v["total"] is not None]
         if total_entries:
-            over_sorted = sorted(total_entries, key=lambda x: x[1])
+            def px_val(px):
+                try:    return int(str(px or "").replace("+", ""))
+                except: return -9999
+            # Best over: lowest total, then best price (least juice) as tiebreaker
+            over_sorted = sorted(total_entries, key=lambda x: (x[1], -px_val(x[2])))
             bo_book, bo_total, bo_px, _ = over_sorted[0]
             others_over = [{"book": b, "odds": f"{t} ({opx})"} for b, t, opx, _ in over_sorted[1:]]
             best_bets.append({
@@ -415,7 +419,8 @@ def parse_odds(game: dict) -> dict:
                 "book": bo_book, "odds": f"{bo_total} ({bo_px})",
                 "raw": bo_total, "others": others_over,
             })
-            under_sorted = sorted(total_entries, key=lambda x: -x[1])
+            # Best under: highest total, then best price (least juice) as tiebreaker
+            under_sorted = sorted(total_entries, key=lambda x: (-x[1], -px_val(x[3])))
             bu_book, bu_total, _, bu_px = under_sorted[0]
             others_under = [{"book": b, "odds": f"{t} ({upx})"} for b, t, _, upx in under_sorted[1:]]
             best_bets.append({

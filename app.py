@@ -65,6 +65,15 @@ OA_SPORTS = {
     "baseball_mlb":           "MLB",
     "icehockey_nhl":          "NHL",
 }
+OA_TO_AN_SLUG = {
+    "americanfootball_nfl":   "nfl",
+    "americanfootball_ncaaf": "ncaaf",
+    "basketball_nba":         "nba",
+    "basketball_ncaab":       "ncaab",
+    "baseball_mlb":           "mlb",
+    "icehockey_nhl":          "nhl",
+}
+AN_SUPP_BOOKS = {68: "Caesars", 69: "bet365"}
 
 # Active source config
 SPORTS    = OA_SPORTS if USE_ODDS_API else AN_SPORTS
@@ -136,6 +145,40 @@ def fetch_sport_an(sport_slug: str) -> list:
     return result
 
 
+# ── ActionNetwork supplemental (Caesars + bet365 only) ───────────────────────
+
+def fetch_supplemental_an(oa_slug: str) -> dict:
+    """Return {(away_lower, home_lower): markets_dict} for Caesars + bet365 only."""
+    an_slug = OA_TO_AN_SLUG.get(oa_slug)
+    if not an_slug:
+        return {}
+    cache_key = f"supp_{an_slug}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        resp = SESSION.get(f"{AN_BASE}/{an_slug}", timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        result = {}
+        for g in (data.get("games") or []):
+            teams = {t["id"]: t for t in (g.get("teams") or [])}
+            away = teams.get(g.get("away_team_id"), {}).get("full_name", "").lower().strip()
+            home = teams.get(g.get("home_team_id"), {}).get("full_name", "").lower().strip()
+            if not away or not home:
+                continue
+            raw = g.get("markets") or {}
+            filtered = {k: v for k, v in raw.items()
+                        if k.isdigit() and int(k) in AN_SUPP_BOOKS}
+            if filtered:
+                result[(away, home)] = filtered
+        cache_set(cache_key, result)
+        return result
+    except Exception as ex:
+        app.logger.warning("Supplemental AN fetch failed for %s: %s", oa_slug, ex)
+        return {}
+
+
 # ── The Odds API fetch ────────────────────────────────────────────────────────
 
 def fetch_sport_oa(sport_slug: str) -> list:
@@ -175,6 +218,13 @@ def fetch_sport_oa(sport_slug: str) -> list:
             "markets":    None,
             "bookmakers": game.get("bookmakers", []),
         })
+
+    # Supplement with Caesars + bet365 from ActionNetwork
+    supp = fetch_supplemental_an(sport_slug)
+    for game in result:
+        key = (game["away"].lower().strip(), game["home"].lower().strip())
+        if key in supp:
+            game["markets"] = supp[key]
 
     cache_set(sport_slug, result)
     return result
@@ -265,8 +315,8 @@ def parse_odds(game: dict) -> dict:
                     elif mkey == "totals":
                         add_total(bname, name.lower(), point, price)
 
-    # ── Format A: ActionNetwork (book_id dict) ────────────────────────────────
-    elif markets and isinstance(next(iter(markets.values()), None), dict):
+    # ── Format A: ActionNetwork (book_id dict) — also runs as OA supplement ──
+    if markets and isinstance(next(iter(markets.values()), None), dict):
         for book_id_str, book_data in markets.items():
             try:
                 bid = int(book_id_str)

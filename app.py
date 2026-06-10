@@ -34,7 +34,7 @@ AN_BOOKS = {
     49: "BetMGM",
     68: "Caesars",
     69: "bet365",
-    71: "ESPN Bet",
+    71: "theScore",
     75: "BetRivers",
 }
 AN_SPORTS = {
@@ -54,7 +54,7 @@ OA_BOOKS = {
     "betmgm":      "BetMGM",
     "betrivers":   "BetRivers",
     "hardrockbet": "Hard Rock",
-    "espnbet":     "ESPN Bet",
+    "espnbet":     "theScore",
 }
 OA_BOOK_KEYS = ",".join(OA_BOOKS.keys())
 OA_SPORTS = {

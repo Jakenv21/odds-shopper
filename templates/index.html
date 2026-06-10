@@ -51,9 +51,68 @@ body {
   flex: 1;
   overflow: hidden;
 }
+/* ── Mobile back button (hidden on desktop) ── */
+.back-btn {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: #58a6ff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 0 0 16px 0;
+  text-align: left;
+  width: 100%;
+}
+.back-btn:hover { color: #79b8ff; }
+
+/* ── Scrollable table wrapper ── */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-wrap table.lines { min-width: 380px; }
+
 @media (max-width: 700px) {
-  .layout { grid-template-columns: 1fr; }
-  .odds-panel { min-height: 50vh; }
+  .header-right { display: none; }
+  .header { padding: 12px 16px; }
+
+  /* Stack panels; each fills the layout area absolutely */
+  .layout {
+    grid-template-columns: 1fr;
+    position: relative;
+    overflow: hidden;
+  }
+  .left-panel,
+  .odds-panel {
+    position: absolute;
+    inset: 0;
+  }
+  .left-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .odds-panel {
+    display: none;
+    overflow-y: auto;
+    padding: 16px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Slide to odds when game is open */
+  body.game-open .left-panel { display: none; }
+  body.game-open .odds-panel { display: block; }
+
+  .back-btn { display: flex; }
+
+  .odds-matchup { font-size: 19px; }
+  .odds-matchup .at { font-size: 15px; }
+
+  /* Hide noisy "others" text on small screens */
+  .bet-others { display: none; }
+  .bet-label  { min-width: 100px; font-size: 11px; }
+
+  .footer { padding: 10px 16px; font-size: 10px; }
 }
 
 /* ── Left panel ── */
@@ -416,6 +475,7 @@ table.lines tr:hover td { background: #161b22; }
 
   <!-- RIGHT: odds display -->
   <div class="odds-panel" id="oddsPanel">
+    <button class="back-btn" id="backBtn">&#8592; Back to games</button>
     <div class="placeholder">
       <div class="icon">📊</div>
       <div>Select a game to see the best lines across all books</div>
@@ -584,7 +644,7 @@ function renderOdds(data, away, home, league, date) {
 
     mlEntries.sort((a, b) => (b[1].away_odds || -9999) - (a[1].away_odds || -9999));
 
-    html += `<table class="lines"><thead><tr>
+    html += `<div class="table-wrap"><table class="lines"><thead><tr>
       <th>Book</th><th>${esc(away)}</th><th>${esc(home)}</th>
     </tr></thead><tbody>`;
 
@@ -603,7 +663,7 @@ function renderOdds(data, away, home, league, date) {
         </td>
       </tr>`;
     }
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
   } else {
     html += '<div class="no-lines">No moneyline posted yet.</div>';
   }
@@ -621,7 +681,7 @@ function renderOdds(data, away, home, league, date) {
     const bestHomePx = Math.max(...spreadEntries.filter(([,v]) => v.home_pt === bestHomePt).map(([,v]) => parseOdds(v.home_px)));
     spreadEntries.sort((a, b) => b[1].away_pt - a[1].away_pt || parseOdds(b[1].away_px) - parseOdds(a[1].away_px));
 
-    html += `<table class="lines"><thead><tr>
+    html += `<div class="table-wrap"><table class="lines"><thead><tr>
       <th>Book</th><th>${esc(away)}</th><th>${esc(home)}</th>
     </tr></thead><tbody>`;
 
@@ -640,7 +700,7 @@ function renderOdds(data, away, home, league, date) {
         </td>
       </tr>`;
     }
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
   } else {
     html += '<div class="no-lines">No spread lines posted yet.</div>';
   }
@@ -658,7 +718,7 @@ function renderOdds(data, away, home, league, date) {
     const bestUnderPx = Math.max(...totalEntries.filter(([,v]) => v.total === bestUnderPt).map(([,v]) => parseOdds(v.under_px)));
     totalEntries.sort((a, b) => a[1].total - b[1].total);
 
-    html += `<table class="lines"><thead><tr>
+    html += `<div class="table-wrap"><table class="lines"><thead><tr>
       <th>Book</th><th>Total</th><th>Over</th><th>Under</th>
     </tr></thead><tbody>`;
 
@@ -676,7 +736,7 @@ function renderOdds(data, away, home, league, date) {
         <td class="num ${uBest ? 'best' : ''}">${v.under_px || '—'}</td>
       </tr>`;
     }
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
   } else {
     html += '<div class="no-lines">No totals posted yet.</div>';
   }
@@ -696,6 +756,14 @@ document.getElementById('gamesList').addEventListener('click', e => {
     card.dataset.league,
     card.dataset.date
   );
+  // Mobile: switch to odds panel
+  document.body.classList.add('game-open');
+  document.getElementById('oddsPanel').scrollTop = 0;
+});
+
+// ── Mobile back button ────────────────────────────────────────────────────────
+document.getElementById('backBtn').addEventListener('click', () => {
+  document.body.classList.remove('game-open');
 });
 
 // ── Filter buttons ────────────────────────────────────────────────────────────

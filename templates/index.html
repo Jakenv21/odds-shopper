@@ -463,6 +463,7 @@ table.lines tr:hover td { background: #161b22; }
         <button class="filter-btn" data-sport="NCAAB">NCAAB</button>
         <button class="filter-btn" data-sport="MLB">MLB</button>
         <button class="filter-btn" data-sport="NHL">NHL</button>
+        <button class="filter-btn" data-sport="SOCCER">Soccer</button>
       </div>
 
       <div class="games-label" id="gamesLabel">Games</div>
@@ -505,6 +506,9 @@ function leagueCode(name) {
       n.includes('NCAA BASKETBALL'))                           return 'NCAAB';
   if (n.includes('MLB') || n.includes('MAJOR LEAGUE'))        return 'MLB';
   if (n.includes('NHL') || n.includes('NATIONAL HOCKEY'))     return 'NHL';
+  if (n.includes('WORLD CUP'))                                return 'WC';
+  if (n.includes('MLS'))                                      return 'MLS';
+  if (n.includes('SOCCER'))                                   return 'SOC';
   return name || '';
 }
 
@@ -539,7 +543,9 @@ function renderGames() {
 
   const filtered = allGames.filter(g => {
     const code = leagueCode(g.sport);
-    const sport_ok = (activeFilter === 'ALL') || (code === activeFilter);
+    const soccerCodes = new Set(['WC','MLS','SOC']);
+    const sport_ok = (activeFilter === 'ALL') ||
+                     (activeFilter === 'SOCCER' ? soccerCodes.has(code) : code === activeFilter);
     const search_ok = !q ||
       g.home.toLowerCase().includes(q) ||
       g.away.toLowerCase().includes(q);
@@ -639,18 +645,22 @@ function renderOdds(data, away, home, league, date) {
   if (mlEntries.length) {
     const awayOdds = mlEntries.map(([,v]) => v.away_odds).filter(x => x != null);
     const homeOdds = mlEntries.map(([,v]) => v.home_odds).filter(x => x != null);
+    const drawOdds = mlEntries.map(([,v]) => v.draw_odds).filter(x => x != null);
     const bestAway = awayOdds.length ? Math.max(...awayOdds) : null;
     const bestHome = homeOdds.length ? Math.max(...homeOdds) : null;
+    const bestDraw = drawOdds.length ? Math.max(...drawOdds) : null;
+    const hasDraw  = drawOdds.length > 0;
 
     mlEntries.sort((a, b) => (b[1].away_odds || -9999) - (a[1].away_odds || -9999));
 
     html += `<div class="table-wrap"><table class="lines"><thead><tr>
-      <th>Book</th><th>${esc(away)}</th><th>${esc(home)}</th>
+      <th>Book</th><th>${esc(away)}</th>${hasDraw ? '<th>Draw</th>' : ''}<th>${esc(home)}</th>
     </tr></thead><tbody>`;
 
     for (const [book, v] of mlEntries) {
       const aBest = v.away_odds === bestAway;
       const hBest = v.home_odds === bestHome;
+      const dBest = hasDraw && v.draw_odds === bestDraw;
       const aCls  = (v.away_odds > 0) ? 'ml-dog' : 'ml-fave';
       const hCls  = (v.home_odds > 0) ? 'ml-dog' : 'ml-fave';
       html += `<tr>
@@ -658,6 +668,9 @@ function renderOdds(data, away, home, league, date) {
         <td class="num ${aBest ? 'best' : ''} ${aCls}">
           ${v.away_px || '—'} ${aBest ? '<span class="best-tag">Best</span>' : ''}
         </td>
+        ${hasDraw ? `<td class="num ${dBest ? 'best' : ''}">
+          ${v.draw_px || '—'} ${dBest ? '<span class="best-tag">Best</span>' : ''}
+        </td>` : ''}
         <td class="num ${hBest ? 'best' : ''} ${hCls}">
           ${v.home_px || '—'} ${hBest ? '<span class="best-tag">Best</span>' : ''}
         </td>

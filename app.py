@@ -64,6 +64,8 @@ OA_SPORTS = {
     "basketball_ncaab":       "NCAAB",
     "baseball_mlb":           "MLB",
     "icehockey_nhl":          "NHL",
+    "soccer_fifa_world_cup":  "World Cup",
+    "soccer_usa_mls":         "MLS",
 }
 OA_TO_AN_SLUG = {
     "americanfootball_nfl":   "nfl",
@@ -286,14 +288,17 @@ def parse_odds(game: dict) -> dict:
 
     def add_ml(bname, side, odds):
         if bname not in moneylines:
-            moneylines[bname] = {"away_px": None, "home_px": None,
-                                 "away_odds": None, "home_odds": None}
+            moneylines[bname] = {"away_px": None, "home_px": None, "draw_px": None,
+                                 "away_odds": None, "home_odds": None, "draw_odds": None}
         if side in ("away", "road"):
             moneylines[bname]["away_px"]   = fmt(odds)
             moneylines[bname]["away_odds"] = odds
         elif side == "home":
             moneylines[bname]["home_px"]   = fmt(odds)
             moneylines[bname]["home_odds"] = odds
+        elif side == "draw":
+            moneylines[bname]["draw_px"]   = fmt(odds)
+            moneylines[bname]["draw_odds"] = odds
 
     # ── Format C: The Odds API ────────────────────────────────────────────────
     if bookmakers:
@@ -307,7 +312,12 @@ def parse_odds(game: dict) -> dict:
                     price = o["price"]
                     point = o.get("point")
                     if mkey == "h2h":
-                        side = "home" if name == home else "away"
+                        if name == "Draw":
+                            side = "draw"
+                        elif name == home:
+                            side = "home"
+                        else:
+                            side = "away"
                         add_ml(bname, side, price)
                     elif mkey == "spreads":
                         side = "home" if name == home else "away"
@@ -366,6 +376,7 @@ def parse_odds(game: dict) -> dict:
 
     for side_label, odds_key in [
         (f"{away} ML", "away_odds"),
+        ("Draw", "draw_odds"),
         (f"{home} ML", "home_odds"),
     ]:
         entries = [(b, v[odds_key]) for b, v in moneylines.items() if v[odds_key] is not None]

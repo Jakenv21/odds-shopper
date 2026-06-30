@@ -21,6 +21,13 @@ from dotenv import load_dotenv
 load_dotenv()
 app = Flask(__name__)
 
+try:
+    from supabase import create_client as _sb_create
+    _sb = _sb_create(os.getenv("SUPABASE_URL", ""), os.getenv("SUPABASE_KEY", "")) \
+        if (os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY")) else None
+except Exception:
+    _sb = None
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "").strip()
@@ -279,12 +286,15 @@ def parse_odds(game: dict) -> dict:
 
     def add_total(bname, side, value, odds):
         if bname not in totals:
-            totals[bname] = {"total": None, "over_px": None, "under_px": None}
+            totals[bname] = {"total": None, "over_px": None, "under_px": None,
+                             "over_raw": None, "under_raw": None}
         totals[bname]["total"] = value
         if side == "over":
-            totals[bname]["over_px"] = fmt(odds)
+            totals[bname]["over_px"]  = fmt(odds)
+            totals[bname]["over_raw"] = odds
         elif side == "under":
-            totals[bname]["under_px"] = fmt(odds)
+            totals[bname]["under_px"]  = fmt(odds)
+            totals[bname]["under_raw"] = odds
 
     def add_ml(bname, side, odds):
         if bname not in moneylines:
@@ -449,6 +459,58 @@ def parse_odds(game: dict) -> dict:
     }
 
 
+# ── Supabase line history ─────────────────────────────────────────────────────
+
+def snapshot_game_odds(game_id: str, parsed: dict):
+    """Store first-seen lines as opening lines. Primary key prevents overwrites."""
+    if not _sb:
+        return
+    rows = []
+    for book, ml in parsed["moneylines"].items():
+        for side, key in [("away", "away_odds"), ("home", "home_odds"), ("draw", "draw_odds")]:
+            if ml.get(key) is not None:
+                rows.append({"game_id": game_id, "book": book, "market": "h2h",
+                             "side": side, "point": None, "price": ml[key]})
+    for book, sp in parsed["spreads"].items():
+        for side, pt_k, raw_k in [("away", "away_pt", "away_raw"), ("home", "home_pt", "home_raw")]:
+            if sp.get(raw_k) is not None:
+                rows.append({"game_id": game_id, "book": book, "market": "spread",
+                             "side": side, "point": sp[pt_k], "price": sp[raw_k]})
+    for book, tot in parsed["totals"].items():
+        if tot.get("over_raw") is not None:
+            rows.append({"game_id": game_id, "book": book, "market": "total",
+                         "side": "over", "point": tot["total"], "price": tot["over_raw"]})
+        if tot.get("under_raw") is not None:
+            rows.append({"game_id": game_id, "book": book, "market": "total",
+                         "side": "under", "point": tot["total"], "price": tot["under_raw"]})
+    if not rows:
+        return
+    try:
+        _sb.table("line_snapshots").upsert(
+            rows, on_conflict="game_id,book,market,side", ignore_duplicates=True
+        ).execute()
+    except Exception as ex:
+        app.logger.warning("Supabase snapshot failed: %s", ex)
+
+
+def get_opening_lines(game_id: str) -> dict:
+    """Return {book: {market: {side: {point, price}}}} for opening-line display."""
+    if not _sb:
+        return {}
+    try:
+        resp = _sb.table("line_snapshots").select("*").eq("game_id", game_id).execute()
+        opening: dict = {}
+        for row in (resp.data or []):
+            b, m, s = row["book"], row["market"], row["side"]
+            opening.setdefault(b, {}).setdefault(m, {})[s] = {
+                "point": row["point"], "price": row["price"]
+            }
+        return opening
+    except Exception as ex:
+        app.logger.warning("Supabase fetch failed: %s", ex)
+        return {}
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -480,20 +542,31 @@ def get_games():
 
 @app.route("/api/odds/<game_id>")
 def get_odds(game_id: str):
-    # Check cache first
+    game = None
     for slug in SPORTS:
         for g in (cache_get(slug) or []):
             if str(g["id"]) == game_id:
-                return jsonify(parse_odds(g))
+                game = g
+                break
+        if game:
+            break
 
-    # Miss — reload and retry
-    for slug in SPORTS:
-        games = fetch_sport(slug)
-        for g in games:
-            if str(g["id"]) == game_id:
-                return jsonify(parse_odds(g))
+    if not game:
+        for slug in SPORTS:
+            for g in fetch_sport(slug):
+                if str(g["id"]) == game_id:
+                    game = g
+                    break
+            if game:
+                break
 
-    abort(404)
+    if not game:
+        abort(404)
+
+    result = parse_odds(game)
+    snapshot_game_odds(game_id, result)
+    result["opening"] = get_opening_lines(game_id)
+    return jsonify(result)
 
 
 if __name__ == "__main__":

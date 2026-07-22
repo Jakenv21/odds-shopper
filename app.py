@@ -37,7 +37,7 @@ _SB_KEY_DEFAULT = (
 try:
     from supabase import create_client as _sb_create
     _SB_URL = _clean_env("SUPABASE_URL") or _SB_URL_DEFAULT
-    _SB_KEY = _clean_env("SUPABASE_KEY") or _SB_KEY_DEFAULT
+    _SB_KEY = _SB_KEY_DEFAULT   # anon key is public-safe; skip env var to avoid paste corruption
     _sb = _sb_create(_SB_URL, _SB_KEY)
 except Exception:
     _sb = None

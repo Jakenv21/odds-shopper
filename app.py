@@ -21,10 +21,15 @@ from dotenv import load_dotenv
 load_dotenv()
 app = Flask(__name__)
 
+def _clean_env(key):
+    """Strip whitespace and any non-ASCII characters that corrupt JWTs when pasted."""
+    return (os.getenv(key, "") or "").strip().encode("ascii", "ignore").decode("ascii").strip()
+
 try:
     from supabase import create_client as _sb_create
-    _sb = _sb_create(os.getenv("SUPABASE_URL", ""), os.getenv("SUPABASE_KEY", "")) \
-        if (os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY")) else None
+    _SB_URL = _clean_env("SUPABASE_URL")
+    _SB_KEY = _clean_env("SUPABASE_KEY")
+    _sb = _sb_create(_SB_URL, _SB_KEY) if (_SB_URL and _SB_KEY) else None
 except Exception:
     _sb = None
 
@@ -606,6 +611,8 @@ def index():
 @app.route("/api/info")
 def get_info():
     sb_status = "not configured"
+    sb_key_preview = _clean_env("SUPABASE_KEY")[:8] + "..." if _clean_env("SUPABASE_KEY") else "missing"
+    sb_url_ok = bool(_clean_env("SUPABASE_URL"))
     if _sb:
         try:
             r = _sb.table("line_snapshots").select("game_id", count="exact").limit(1).execute()
@@ -613,10 +620,12 @@ def get_info():
         except Exception as ex:
             sb_status = f"error: {ex}"
     return jsonify({
-        "source":    "The Odds API (real-time)" if USE_ODDS_API else "ActionNetwork (~15-30 min delay)",
-        "realtime":  USE_ODDS_API,
-        "cache_ttl": CACHE_TTL,
-        "supabase":  sb_status,
+        "source":      "The Odds API (real-time)" if USE_ODDS_API else "ActionNetwork (~15-30 min delay)",
+        "realtime":    USE_ODDS_API,
+        "cache_ttl":   CACHE_TTL,
+        "supabase":    sb_status,
+        "sb_url_set":  sb_url_ok,
+        "sb_key_hint": sb_key_preview,
     })
 
 

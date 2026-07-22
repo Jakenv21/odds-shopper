@@ -426,7 +426,57 @@ table.lines tr:hover td { background: #161b22; }
   text-align: center;
 }
 
-/* ── Line movement ── */
+/* ── Line movement summary card ── */
+.movement-card {
+  background: #0d1a2a;
+  border: 1px solid #1a3a5a;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  padding: 16px 20px;
+}
+.movement-title {
+  color: #58a6ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+.movement-row {
+  align-items: center;
+  border-top: 1px solid #1a3a5a;
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+.movement-row:first-of-type { border-top: none; }
+.mv-label {
+  color: #8b949e;
+  font-size: 12px;
+  min-width: 140px;
+}
+.mv-book {
+  background: #1a3a5a;
+  border-radius: 4px;
+  color: #58a6ff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+}
+.mv-change {
+  align-items: center;
+  display: flex;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  gap: 7px;
+}
+.mv-from  { color: #484f58; text-decoration: line-through; }
+.mv-sep   { color: #30363d; }
+.mv-to    { font-weight: 700; }
+.mv-no-change { color: #484f58; font-size: 11px; margin-left: 4px; }
+
+/* ── Line movement inline ── */
 .open-line {
   display: block;
   font-size: 10px;
@@ -678,6 +728,70 @@ function renderOdds(data, away, home, league, date) {
           <span class="bet-answer">${esc(bet.odds)}</span>
           ${othersHtml}
         </div>`;
+    }
+    html += `</div>`;
+  }
+
+  // ── Line Movement card ────────────────────────────────────────────────────
+  const moves = [];
+
+  function fmtMv(n) { return n > 0 ? '+' + n : String(n); }
+
+  for (const [book, v] of Object.entries(moneylines)) {
+    for (const [side, key, lbl] of [
+      ['away', 'away_odds', `${away} ML`],
+      ['home', 'home_odds', `${home} ML`],
+      ['draw', 'draw_odds', 'Draw ML'],
+    ]) {
+      const cur = v[key];  const od = openDat(opening, book, 'h2h', side);
+      if (cur == null || !od || od.price == null || od.price === cur) continue;
+      moves.push({ lbl, book, from: fmtMv(od.price), to: fmtMv(cur), better: cur > od.price });
+    }
+  }
+
+  for (const [book, v] of Object.entries(spreads)) {
+    for (const [side, ptK, rawK, lbl] of [
+      ['away', 'away_pt', 'away_raw', `${away} Spread`],
+      ['home', 'home_pt', 'home_raw', `${home} Spread`],
+    ]) {
+      const od = openDat(opening, book, 'spread', side);
+      if (!od) continue;
+      if (od.point != null && Number(od.point) !== v[ptK]) {
+        moves.push({ lbl, book, from: fmtSpread(od.point), to: fmtSpread(v[ptK]), better: v[ptK] > od.point });
+      } else if (od.price != null && v[rawK] != null && od.price !== v[rawK]) {
+        moves.push({ lbl, book, from: fmtMv(od.price), to: fmtMv(v[rawK]), better: v[rawK] > od.price });
+      }
+    }
+  }
+
+  for (const [book, v] of Object.entries(totals)) {
+    const overOd  = openDat(opening, book, 'total', 'over');
+    const underOd = openDat(opening, book, 'total', 'under');
+    if (overOd && overOd.point != null && Number(overOd.point) !== v.total) {
+      moves.push({ lbl: 'Total Line', book, from: String(overOd.point), to: String(v.total), better: null });
+    } else {
+      if (v.over_raw != null && overOd && overOd.price != null && overOd.price !== v.over_raw)
+        moves.push({ lbl: `Over ${v.total}`, book, from: fmtMv(overOd.price), to: fmtMv(v.over_raw), better: v.over_raw > overOd.price });
+      if (v.under_raw != null && underOd && underOd.price != null && underOd.price !== v.under_raw)
+        moves.push({ lbl: `Under ${v.total}`, book, from: fmtMv(underOd.price), to: fmtMv(v.under_raw), better: v.under_raw > underOd.price });
+    }
+  }
+
+  if (moves.length) {
+    html += `<div class="movement-card"><div class="movement-title">📈 Line Movement Since Open</div>`;
+    for (const m of moves) {
+      const arrow = m.better === null ? '→' : m.better ? '▲' : '▼';
+      const cls   = m.better === null ? '' : m.better ? 'move-up' : 'move-down';
+      html += `<div class="movement-row">
+        <span class="mv-label">${esc(m.lbl)}</span>
+        <span class="mv-book">${esc(m.book)}</span>
+        <div class="mv-change">
+          <span class="mv-from">${esc(m.from)}</span>
+          <span class="mv-sep">→</span>
+          <span class="mv-to ${cls}">${esc(m.to)}</span>
+          <span class="${cls}" style="font-size:11px">${arrow}</span>
+        </div>
+      </div>`;
     }
     html += `</div>`;
   }

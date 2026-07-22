@@ -15,7 +15,7 @@ import time
 import requests
 from collections import Counter
 from datetime import datetime, timezone
-from flask import Flask, render_template, jsonify, abort
+from flask import Flask, render_template, jsonify, abort, request
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,6 +32,20 @@ except Exception:
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "").strip()
 USE_ODDS_API = bool(ODDS_API_KEY)
+
+# Closing-line capture: shared secret so only the cron can trigger /api/capture,
+# and which sports to snapshot (comma-separated friendly names). Default NCAAF-only
+# to keep The Odds API credit usage bounded — see schema.sql "COST NOTE".
+CAPTURE_TOKEN  = os.getenv("CAPTURE_TOKEN", "").strip()
+CAPTURE_SPORTS = os.getenv("CAPTURE_SPORTS", "ncaaf").strip()
+FRIENDLY_TO_OA = {
+    "nfl":   "americanfootball_nfl",
+    "ncaaf": "americanfootball_ncaaf",
+    "nba":   "basketball_nba",
+    "ncaab": "basketball_ncaab",
+    "mlb":   "baseball_mlb",
+    "nhl":   "icehockey_nhl",
+}
 
 # ActionNetwork
 AN_BASE  = "https://api.actionnetwork.com/web/v2/scoreboard"
@@ -113,10 +127,11 @@ def cache_set(key, data):
 
 # ── ActionNetwork fetch ───────────────────────────────────────────────────────
 
-def fetch_sport_an(sport_slug: str) -> list:
-    cached = cache_get(sport_slug)
-    if cached is not None:
-        return cached
+def fetch_sport_an(sport_slug: str, force: bool = False) -> list:
+    if not force:
+        cached = cache_get(sport_slug)
+        if cached is not None:
+            return cached
 
     resp = SESSION.get(f"{AN_BASE}/{sport_slug}", timeout=15)
     resp.raise_for_status()
@@ -190,10 +205,11 @@ def fetch_supplemental_an(oa_slug: str) -> dict:
 
 # ── The Odds API fetch ────────────────────────────────────────────────────────
 
-def fetch_sport_oa(sport_slug: str) -> list:
-    cached = cache_get(sport_slug)
-    if cached is not None:
-        return cached
+def fetch_sport_oa(sport_slug: str, force: bool = False) -> list:
+    if not force:
+        cached = cache_get(sport_slug)
+        if cached is not None:
+            return cached
 
     params = {
         "apiKey":     ODDS_API_KEY,
@@ -239,8 +255,8 @@ def fetch_sport_oa(sport_slug: str) -> list:
     return result
 
 
-def fetch_sport(sport_slug: str) -> list:
-    return fetch_sport_oa(sport_slug) if USE_ODDS_API else fetch_sport_an(sport_slug)
+def fetch_sport(sport_slug: str, force: bool = False) -> list:
+    return fetch_sport_oa(sport_slug, force) if USE_ODDS_API else fetch_sport_an(sport_slug, force)
 
 
 def all_games() -> list:
@@ -461,36 +477,64 @@ def parse_odds(game: dict) -> dict:
 
 # ── Supabase line history ─────────────────────────────────────────────────────
 
-def snapshot_game_odds(game_id: str, parsed: dict):
-    """Store first-seen lines as opening lines. Primary key prevents overwrites."""
-    if not _sb:
-        return
+def _snapshot_rows(game_id: str, parsed: dict, phase: str,
+                   commence_time, captured_at=None) -> list:
+    """Flatten a parsed game into one line_snapshots row per book/market/side."""
+    base = {"game_id": game_id, "phase": phase,
+            "commence_time": (commence_time or None)}
+    if captured_at:
+        base["captured_at"] = captured_at
     rows = []
     for book, ml in parsed["moneylines"].items():
         for side, key in [("away", "away_odds"), ("home", "home_odds"), ("draw", "draw_odds")]:
             if ml.get(key) is not None:
-                rows.append({"game_id": game_id, "book": book, "market": "h2h",
+                rows.append({**base, "book": book, "market": "h2h",
                              "side": side, "point": None, "price": ml[key]})
     for book, sp in parsed["spreads"].items():
         for side, pt_k, raw_k in [("away", "away_pt", "away_raw"), ("home", "home_pt", "home_raw")]:
             if sp.get(raw_k) is not None:
-                rows.append({"game_id": game_id, "book": book, "market": "spread",
+                rows.append({**base, "book": book, "market": "spread",
                              "side": side, "point": sp[pt_k], "price": sp[raw_k]})
     for book, tot in parsed["totals"].items():
         if tot.get("over_raw") is not None:
-            rows.append({"game_id": game_id, "book": book, "market": "total",
+            rows.append({**base, "book": book, "market": "total",
                          "side": "over", "point": tot["total"], "price": tot["over_raw"]})
         if tot.get("under_raw") is not None:
-            rows.append({"game_id": game_id, "book": book, "market": "total",
+            rows.append({**base, "book": book, "market": "total",
                          "side": "under", "point": tot["total"], "price": tot["under_raw"]})
+    return rows
+
+
+def snapshot_opening(game_id: str, parsed: dict, commence_time=None):
+    """Store first-seen lines as the OPEN. ignore_duplicates keeps the first write."""
+    if not _sb:
+        return
+    rows = _snapshot_rows(game_id, parsed, "open", commence_time)
     if not rows:
         return
     try:
         _sb.table("line_snapshots").upsert(
-            rows, on_conflict="game_id,book,market,side", ignore_duplicates=True
+            rows, on_conflict="game_id,book,market,side,phase", ignore_duplicates=True
         ).execute()
     except Exception as ex:
-        app.logger.warning("Supabase snapshot failed: %s", ex)
+        app.logger.warning("Supabase opening snapshot failed: %s", ex)
+
+
+def snapshot_closing(game_id: str, parsed: dict, commence_time=None):
+    """Overwrite the CLOSE row each run. The last write before kickoff = the true close,
+    so this MUST only be called while the game has not yet started."""
+    if not _sb:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    rows = _snapshot_rows(game_id, parsed, "close", commence_time, captured_at=now_iso)
+    if not rows:
+        return
+    try:
+        _sb.table("line_snapshots").upsert(
+            rows, on_conflict="game_id,book,market,side,phase"  # no ignore_duplicates -> overwrite
+        ).execute()
+    except Exception as ex:
+        app.logger.warning("Supabase closing snapshot failed: %s", ex)
 
 
 def get_opening_lines(game_id: str) -> dict:
@@ -498,7 +542,8 @@ def get_opening_lines(game_id: str) -> dict:
     if not _sb:
         return {}
     try:
-        resp = _sb.table("line_snapshots").select("*").eq("game_id", game_id).execute()
+        resp = _sb.table("line_snapshots").select("*") \
+            .eq("game_id", game_id).eq("phase", "open").execute()
         opening: dict = {}
         for row in (resp.data or []):
             b, m, s = row["book"], row["market"], row["side"]
@@ -509,6 +554,49 @@ def get_opening_lines(game_id: str) -> dict:
     except Exception as ex:
         app.logger.warning("Supabase fetch failed: %s", ex)
         return {}
+
+
+def resolve_capture_slugs(param: str = "") -> list:
+    """Map friendly sport names (ncaaf,nfl,...) to the active source's slugs."""
+    names = [s.strip().lower() for s in (param or CAPTURE_SPORTS).split(",") if s.strip()]
+    slugs = []
+    for n in names:
+        slug = FRIENDLY_TO_OA.get(n) if USE_ODDS_API else (n if n in AN_SPORTS else None)
+        if slug and slug in SPORTS and slug not in slugs:
+            slugs.append(slug)
+    return slugs or list(SPORTS.keys())
+
+
+def run_capture(slugs: list) -> dict:
+    """Snapshot opens (once) and closes (rolling, pre-kickoff only) for the given sports.
+    Force-refreshes odds so the close reflects the latest pre-kickoff number, not cache."""
+    now_ts = time.time()
+    opened = closed = games_seen = 0
+    for slug in slugs:
+        try:
+            games = fetch_sport(slug, force=True)
+        except Exception as ex:
+            app.logger.warning("capture: could not load %s: %s", slug, ex)
+            continue
+        for g in games:
+            games_seen += 1
+            start_ts = None
+            try:
+                start_ts = datetime.fromisoformat(
+                    (g.get("date") or "").replace("Z", "+00:00")).timestamp()
+            except Exception:
+                pass
+            parsed = parse_odds(g)
+            if not parsed["best_bets"]:
+                continue
+            snapshot_opening(g["id"], parsed, g.get("date"))
+            opened += 1
+            # Only update the close while the game is still in the future.
+            if start_ts is None or start_ts > now_ts:
+                snapshot_closing(g["id"], parsed, g.get("date"))
+                closed += 1
+    return {"sports": slugs, "games_seen": games_seen,
+            "opens_recorded": opened, "closes_updated": closed}
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -564,9 +652,29 @@ def get_odds(game_id: str):
         abort(404)
 
     result = parse_odds(game)
-    snapshot_game_odds(game_id, result)
-    result["opening"] = get_opening_lines(game_id)
+    try:
+        dt = datetime.fromisoformat((game.get("date") or "").replace("Z", "+00:00"))
+        game_started = dt.timestamp() <= time.time()
+    except Exception:
+        game_started = False
+
+    if not game_started:
+        snapshot_opening(game_id, result, game.get("date"))
+        result["opening"] = get_opening_lines(game_id)
+    else:
+        result["opening"] = {}
     return jsonify(result)
+
+
+@app.route("/api/capture")
+def capture():
+    """Cron-triggered closing-line capture. Protected by CAPTURE_TOKEN."""
+    if not CAPTURE_TOKEN or request.args.get("token", "") != CAPTURE_TOKEN:
+        abort(403)
+    if not _sb:
+        return jsonify({"error": "Supabase not configured (set SUPABASE_URL / SUPABASE_KEY)"}), 503
+    slugs = resolve_capture_slugs(request.args.get("sports", ""))
+    return jsonify(run_capture(slugs))
 
 
 if __name__ == "__main__":

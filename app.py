@@ -605,10 +605,18 @@ def index():
 
 @app.route("/api/info")
 def get_info():
+    sb_status = "not configured"
+    if _sb:
+        try:
+            r = _sb.table("line_snapshots").select("game_id", count="exact").limit(1).execute()
+            sb_status = f"ok ({r.count} rows)"
+        except Exception as ex:
+            sb_status = f"error: {ex}"
     return jsonify({
         "source":    "The Odds API (real-time)" if USE_ODDS_API else "ActionNetwork (~15-30 min delay)",
         "realtime":  USE_ODDS_API,
         "cache_ttl": CACHE_TTL,
+        "supabase":  sb_status,
     })
 
 

@@ -478,12 +478,9 @@ def parse_odds(game: dict) -> dict:
 # ── Supabase line history ─────────────────────────────────────────────────────
 
 def _snapshot_rows(game_id: str, parsed: dict, phase: str,
-                   commence_time, captured_at=None) -> list:
+                   commence_time=None, captured_at=None) -> list:
     """Flatten a parsed game into one line_snapshots row per book/market/side."""
-    base = {"game_id": game_id, "phase": phase,
-            "commence_time": (commence_time or None)}
-    if captured_at:
-        base["captured_at"] = captured_at
+    base = {"game_id": game_id, "phase": phase}
     rows = []
     for book, ml in parsed["moneylines"].items():
         for side, key in [("away", "away_odds"), ("home", "home_odds"), ("draw", "draw_odds")]:

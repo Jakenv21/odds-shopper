@@ -25,11 +25,20 @@ def _clean_env(key):
     """Strip whitespace and any non-ASCII characters that corrupt JWTs when pasted."""
     return (os.getenv(key, "") or "").strip().encode("ascii", "ignore").decode("ascii").strip()
 
+# Supabase anon key is a publishable credential — safe to include in source.
+# Env vars override these defaults; falls back to constants so a bad paste never breaks things.
+_SB_URL_DEFAULT = "https://pasedeakyktwhsumltkz.supabase.co"
+_SB_KEY_DEFAULT = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    ".eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBhc2VkZWFreWt0d2hzdW1sdGt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MzkwNjMsImV4cCI6MjA5ODQxNTA2M30"
+    ".ARMl8TWk2DAODzMwfFbbkfZg1cYl3-g7CtqvY3cRYv4"
+)
+
 try:
     from supabase import create_client as _sb_create
-    _SB_URL = _clean_env("SUPABASE_URL")
-    _SB_KEY = _clean_env("SUPABASE_KEY")
-    _sb = _sb_create(_SB_URL, _SB_KEY) if (_SB_URL and _SB_KEY) else None
+    _SB_URL = _clean_env("SUPABASE_URL") or _SB_URL_DEFAULT
+    _SB_KEY = _clean_env("SUPABASE_KEY") or _SB_KEY_DEFAULT
+    _sb = _sb_create(_SB_URL, _SB_KEY)
 except Exception:
     _sb = None
 

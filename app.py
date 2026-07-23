@@ -414,10 +414,10 @@ def parse_odds(game: dict) -> dict:
     # ── Build best_bets ───────────────────────────────────────────────────────
     best_bets = []
 
-    for side_label, odds_key in [
-        (f"{away} ML", "away_odds"),
-        ("Draw", "draw_odds"),
-        (f"{home} ML", "home_odds"),
+    for side_label, odds_key, ml_side in [
+        (f"{away} ML", "away_odds", "away"),
+        ("Draw",        "draw_odds", "draw"),
+        (f"{home} ML",  "home_odds", "home"),
     ]:
         entries = [(b, v[odds_key]) for b, v in moneylines.items() if v[odds_key] is not None]
         if not entries:
@@ -429,11 +429,12 @@ def parse_odds(game: dict) -> dict:
             "type": "ml", "label": side_label,
             "book": best_book, "odds": fmt(best_odds),
             "raw": best_odds, "others": others,
+            "market": "h2h", "side": ml_side,
         })
 
-    for side_label, pt_key, px_key, raw_key in [
-        (f"{away} Spread", "away_pt", "away_px", "away_raw"),
-        (f"{home} Spread", "home_pt", "home_px", "home_raw"),
+    for side_label, pt_key, px_key, raw_key, sp_side in [
+        (f"{away} Spread", "away_pt", "away_px", "away_raw", "away"),
+        (f"{home} Spread", "home_pt", "home_px", "home_raw", "home"),
     ]:
         entries = [(b, v[pt_key], v[px_key], v.get(raw_key))
                    for b, v in spreads.items() if v[pt_key] is not None]
@@ -444,14 +445,15 @@ def parse_odds(game: dict) -> dict:
         consensus_pt = Counter(e[1] for e in entries).most_common(1)[0][0]
         consensus = [(b, pt, px, raw) for b, pt, px, raw in entries if pt == consensus_pt]
         consensus.sort(key=lambda x: -(x[3] if x[3] is not None else -9999))
-        best_book, best_pt, best_px, _ = consensus[0]
+        best_book, best_pt, best_px, best_raw = consensus[0]
         others = [{"book": b, "odds": f"{'+' if pt > 0 else ''}{pt} ({px})"}
                   for b, pt, px, _ in consensus[1:]]
         best_bets.append({
             "type": "spread", "label": side_label,
             "book": best_book,
             "odds": f"{'+' if best_pt > 0 else ''}{best_pt} ({best_px})",
-            "raw": best_pt, "others": others,
+            "raw": best_pt, "raw_price": best_raw, "others": others,
+            "market": "spread", "side": sp_side,
         })
 
     if totals:
@@ -469,6 +471,7 @@ def parse_odds(game: dict) -> dict:
                 "type": "over", "label": "Best Over",
                 "book": bo_book, "odds": f"{bo_total} ({bo_px})",
                 "raw": bo_total, "others": others_over,
+                "market": "total", "side": "over",
             })
             # Best under: highest total, then best price (least juice) as tiebreaker
             under_sorted = sorted(total_entries, key=lambda x: (-x[1], -px_val(x[3])))
@@ -478,6 +481,7 @@ def parse_odds(game: dict) -> dict:
                 "type": "under", "label": "Best Under",
                 "book": bu_book, "odds": f"{bu_total} ({bu_px})",
                 "raw": bu_total, "others": others_under,
+                "market": "total", "side": "under",
             })
 
     return {
@@ -559,7 +563,8 @@ def get_opening_lines(game_id: str) -> dict:
         for row in (resp.data or []):
             b, m, s = row["book"], row["market"], row["side"]
             opening.setdefault(b, {}).setdefault(m, {})[s] = {
-                "point": row["point"], "price": row["price"]
+                "point": row["point"], "price": row["price"],
+                "snapped_at": row.get("snapped_at"),
             }
         return opening
     except Exception as ex:

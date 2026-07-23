@@ -476,16 +476,53 @@ table.lines tr:hover td { background: #161b22; }
 .mv-to    { font-weight: 700; }
 .mv-no-change { color: #484f58; font-size: 11px; margin-left: 4px; }
 
-/* ── Line movement inline ── */
+/* ── Line movement inline (under each price in the tables) ── */
 .open-line {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  margin-top: 2px;
+  margin-top: 3px;
+  letter-spacing: -0.2px;
 }
 .move-up   { color: #3fb950; }
 .move-down { color: #f85149; }
 .move-flat { color: #484f58; }
+
+/* ── Movement annotation in best-bets card ── */
+.bet-mov {
+  font-size: 11px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+/* ── Movement table (redesigned movement card) ── */
+.mv-table { border-collapse: collapse; width: 100%; margin-top: 4px; }
+.mv-table th {
+  color: #484f58;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 4px 10px;
+  text-align: left;
+  text-transform: uppercase;
+}
+.mv-table td {
+  border-top: 1px solid #1a3a5a;
+  padding: 8px 10px;
+  vertical-align: middle;
+}
+.mv-table .mv-bet-lbl { color: #8b949e; font-size: 12px; }
+.mv-table .mv-book-cell {
+  color: #58a6ff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.mv-table .mv-num {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+}
+.mv-table .mv-from { color: #484f58; }
+.mv-table .mv-sep-cell { color: #30363d; font-size: 11px; padding: 0 4px; }
+.mv-table .mv-indicator { font-size: 13px; padding-left: 4px; }
 
 /* ── Footer ── */
 .footer {
@@ -671,6 +708,15 @@ function fmtPxInt(n) {
   return n > 0 ? '+' + n : String(n);
 }
 
+function fmtTime(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleTimeString('en-US', {
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+    });
+  } catch { return ''; }
+}
+
 function movHtml(curPrice, od, higherIsBetter) {
   if (curPrice == null || !od || od.price == null || od.price === curPrice) return '';
   const better = higherIsBetter ? curPrice > od.price : curPrice < od.price;
@@ -688,6 +734,42 @@ function movPtHtml(curPt, curRaw, od) {
     const better = curRaw > od.price;
     return `<span class="open-line ${better ? 'move-up' : 'move-down'}">${better ? '▲' : '▼'} ${fmtPxInt(od.price)} open</span>`;
   }
+  return '';
+}
+
+// Opening-line movement annotation for the Best Bets card
+function betOpenAnnotation(bet, opening) {
+  if (!bet.market || !bet.side) return '';
+  const od = openDat(opening, bet.book, bet.market, bet.side);
+  if (!od || od.price == null) return '';
+
+  if (bet.type === 'ml') {
+    if (od.price === bet.raw) return '';
+    const better = bet.raw > od.price;
+    return `<span class="bet-mov ${better ? 'move-up' : 'move-down'}">(was ${fmtPxInt(od.price)})</span>`;
+  }
+
+  if (bet.type === 'spread') {
+    if (od.point != null && Number(od.point) !== bet.raw) {
+      const better = bet.raw > od.point;
+      return `<span class="bet-mov ${better ? 'move-up' : 'move-down'}">(was ${fmtSpread(od.point)})</span>`;
+    }
+    if (bet.raw_price != null && od.price != null && od.price !== bet.raw_price) {
+      const better = bet.raw_price > od.price;
+      return `<span class="bet-mov ${better ? 'move-up' : 'move-down'}">(was ${fmtPxInt(od.price)})</span>`;
+    }
+    return '';
+  }
+
+  if (bet.type === 'over' || bet.type === 'under') {
+    if (od.point != null && Number(od.point) !== bet.raw) {
+      const isBetOver = bet.type === 'over';
+      const better = isBetOver ? bet.raw < od.point : bet.raw > od.point;
+      return `<span class="bet-mov ${better ? 'move-up' : 'move-down'}">(was ${od.point})</span>`;
+    }
+    return '';
+  }
+
   return '';
 }
 
@@ -720,12 +802,14 @@ function renderOdds(data, away, home, league, date) {
       const othersHtml = bet.others && bet.others.length
         ? `<span class="bet-others">  (${bet.others.slice(0,3).map(o => `${o.book}: ${o.odds}`).join(' · ')})</span>`
         : '';
+      const movAnn = betOpenAnnotation(bet, opening);
       html += `
         <div class="best-bet-row">
           <span class="bet-label">${esc(bet.label)}</span>
           <span class="bet-arrow">→</span>
           <span class="bet-book">${esc(bet.book)}</span>
           <span class="bet-answer">${esc(bet.odds)}</span>
+          ${movAnn}
           ${othersHtml}
         </div>`;
     }
@@ -778,22 +862,36 @@ function renderOdds(data, away, home, league, date) {
   }
 
   if (moves.length) {
-    html += `<div class="movement-card"><div class="movement-title">📈 Line Movement Since Open</div>`;
-    for (const m of moves) {
-      const arrow = m.better === null ? '→' : m.better ? '▲' : '▼';
-      const cls   = m.better === null ? '' : m.better ? 'move-up' : 'move-down';
-      html += `<div class="movement-row">
-        <span class="mv-label">${esc(m.lbl)}</span>
-        <span class="mv-book">${esc(m.book)}</span>
-        <div class="mv-change">
-          <span class="mv-from">${esc(m.from)}</span>
-          <span class="mv-sep">→</span>
-          <span class="mv-to ${cls}">${esc(m.to)}</span>
-          <span class="${cls}" style="font-size:11px">${arrow}</span>
-        </div>
-      </div>`;
+    // Find earliest open timestamp to show in header
+    let openedAt = '';
+    for (const [, bk] of Object.entries(opening)) {
+      for (const [, mk] of Object.entries(bk)) {
+        for (const [, sd] of Object.entries(mk)) {
+          if (sd.snapped_at && (!openedAt || sd.snapped_at < openedAt)) openedAt = sd.snapped_at;
+        }
+      }
     }
-    html += `</div>`;
+    const openedLabel = openedAt ? ` <span style="color:#484f58;font-weight:400;text-transform:none;letter-spacing:0;">· opened ${fmtTime(openedAt)}</span>` : '';
+    html += `<div class="movement-card">
+      <div class="movement-title">📈 Line Movement Since Open${openedLabel}</div>
+      <div class="table-wrap"><table class="mv-table">
+        <thead><tr>
+          <th>Bet</th><th>Book</th><th>Open</th><th></th><th>Now</th><th></th>
+        </tr></thead>
+        <tbody>`;
+    for (const m of moves) {
+      const cls   = m.better === null ? 'move-flat' : m.better ? 'move-up' : 'move-down';
+      const arrow = m.better === null ? '—' : m.better ? '▲' : '▼';
+      html += `<tr>
+        <td class="mv-bet-lbl">${esc(m.lbl)}</td>
+        <td class="mv-book-cell">${esc(m.book)}</td>
+        <td class="mv-num mv-from">${esc(m.from)}</td>
+        <td class="mv-sep-cell">→</td>
+        <td class="mv-num ${cls}">${esc(m.to)}</td>
+        <td class="mv-indicator ${cls}">${arrow}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div></div>`;
   }
 
   // ── Moneylines ─────────────────────────────────────────────────────────────

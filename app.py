@@ -25,20 +25,17 @@ def _clean_env(key):
     """Strip whitespace and any non-ASCII characters that corrupt JWTs when pasted."""
     return (os.getenv(key, "") or "").strip().encode("ascii", "ignore").decode("ascii").strip()
 
-# Supabase anon key is a publishable credential — safe to include in source.
-# Env vars override these defaults; falls back to constants so a bad paste never breaks things.
+# Supabase credentials come from the environment ONLY — the key is deliberately not
+# hardcoded. Once RLS is on, writes need the service_role key, which is a real secret
+# and must never sit in a public repo. _clean_env strips the whitespace/non-ASCII that
+# corrupted earlier dashboard pastes, which is what the old hardcoded fallback worked around.
 _SB_URL_DEFAULT = "https://pasedeakyktwhsumltkz.supabase.co"
-_SB_KEY_DEFAULT = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
-    ".eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBhc2VkZWFreWt0d2hzdW1sdGt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MzkwNjMsImV4cCI6MjA5ODQxNTA2M30"
-    ".ARMl8TWk2DAODzMwfFbbkfZg1cYl3-g7CtqvY3cRYv4"
-)
 
 try:
     from supabase import create_client as _sb_create
     _SB_URL = _clean_env("SUPABASE_URL") or _SB_URL_DEFAULT
-    _SB_KEY = _SB_KEY_DEFAULT   # anon key is public-safe; skip env var to avoid paste corruption
-    _sb = _sb_create(_SB_URL, _SB_KEY)
+    _SB_KEY = _clean_env("SUPABASE_KEY")
+    _sb = _sb_create(_SB_URL, _SB_KEY) if _SB_KEY else None
 except Exception:
     _sb = None
 
@@ -53,13 +50,18 @@ USE_ODDS_API = bool(ODDS_API_KEY)
 CAPTURE_TOKEN  = os.getenv("CAPTURE_TOKEN", "").strip()
 CAPTURE_SPORTS = os.getenv("CAPTURE_SPORTS", "ncaaf").strip()
 FRIENDLY_TO_OA = {
-    "nfl":   "americanfootball_nfl",
-    "ncaaf": "americanfootball_ncaaf",
-    "nba":   "basketball_nba",
-    "ncaab": "basketball_ncaab",
-    "mlb":   "baseball_mlb",
-    "nhl":   "icehockey_nhl",
+    "nfl":    "americanfootball_nfl",
+    "nflpre": "americanfootball_nfl_preseason",
+    "ncaaf":  "americanfootball_ncaaf",
+    "nba":    "basketball_nba",
+    "ncaab":  "basketball_ncaab",
+    "mlb":    "baseball_mlb",
+    "nhl":    "icehockey_nhl",
 }
+
+# ActionNetwork has no separate preseason feed — preseason games ride along in the
+# regular NFL scoreboard, so the free fallback path aliases nflpre onto nfl.
+AN_FRIENDLY_ALIAS = {"nflpre": "nfl"}
 
 # ActionNetwork
 AN_BASE  = "https://api.actionnetwork.com/web/v2/scoreboard"
@@ -93,7 +95,8 @@ OA_BOOKS = {
 }
 OA_BOOK_KEYS = ",".join(OA_BOOKS.keys())
 OA_SPORTS = {
-    "americanfootball_nfl":   "NFL",
+    "americanfootball_nfl":           "NFL",
+    "americanfootball_nfl_preseason": "NFL Preseason",
     "americanfootball_ncaaf": "NCAAF",
     "basketball_nba":         "NBA",
     "basketball_ncaab":       "NCAAB",
@@ -103,7 +106,8 @@ OA_SPORTS = {
     "soccer_usa_mls":         "MLS",
 }
 OA_TO_AN_SLUG = {
-    "americanfootball_nfl":   "nfl",
+    "americanfootball_nfl":           "nfl",
+    "americanfootball_nfl_preseason": "nfl",   # AN bundles preseason into the NFL feed
     "americanfootball_ncaaf": "ncaaf",
     "basketball_nba":         "nba",
     "basketball_ncaab":       "ncaab",
@@ -499,6 +503,14 @@ def _snapshot_rows(game_id: str, parsed: dict, phase: str,
                    commence_time=None, captured_at=None) -> list:
     """Flatten a parsed game into one line_snapshots row per book/market/side."""
     base = {"game_id": game_id, "phase": phase}
+    if commence_time:
+        base["commence_time"] = commence_time
+    if captured_at:
+        # snapped_at's DB default only fires on INSERT, and a close row gets upserted
+        # over and over. Without writing it explicitly, every close would keep the
+        # timestamp of the FIRST capture, so you could never tell how near kickoff
+        # the recorded number actually was — which is the whole point of a close.
+        base["snapped_at"] = captured_at
     rows = []
     for book, ml in parsed["moneylines"].items():
         for side, key in [("away", "away_odds"), ("home", "home_odds"), ("draw", "draw_odds")]:
@@ -573,14 +585,26 @@ def get_opening_lines(game_id: str) -> dict:
 
 
 def resolve_capture_slugs(param: str = "") -> list:
-    """Map friendly sport names (ncaaf,nfl,...) to the active source's slugs."""
+    """Map friendly sport names (ncaaf,nflpre,...) to the active source's slugs."""
     names = [s.strip().lower() for s in (param or CAPTURE_SPORTS).split(",") if s.strip()]
     slugs = []
     for n in names:
-        slug = FRIENDLY_TO_OA.get(n) if USE_ODDS_API else (n if n in AN_SPORTS else None)
+        if USE_ODDS_API:
+            slug = FRIENDLY_TO_OA.get(n)
+        else:
+            n_an = AN_FRIENDLY_ALIAS.get(n, n)
+            slug = n_an if n_an in AN_SPORTS else None
         if slug and slug in SPORTS and slug not in slugs:
             slugs.append(slug)
-    return slugs or list(SPORTS.keys())
+    if slugs:
+        return slugs
+    if names:
+        # Names were configured but none resolved (typo in CAPTURE_SPORTS). Do NOT
+        # silently fall back to every sport — that quietly burns the API credit
+        # budget on basketball. Return empty so the cron reports a failure instead.
+        app.logger.warning("capture: no valid sports in %r — check CAPTURE_SPORTS", names)
+        return []
+    return list(SPORTS.keys())
 
 
 def run_capture(slugs: list) -> dict:
@@ -588,11 +612,18 @@ def run_capture(slugs: list) -> dict:
     Force-refreshes odds so the close reflects the latest pre-kickoff number, not cache."""
     now_ts = time.time()
     opened = closed = games_seen = 0
+    errors = []
+    if not slugs:
+        errors.append("no sports resolved — check CAPTURE_SPORTS")
     for slug in slugs:
         try:
             games = fetch_sport(slug, force=True)
         except Exception as ex:
+            # Most likely cause in-season is an exhausted Odds API credit balance.
+            # Surfaced in the return value so the cron can exit non-zero and Render
+            # marks the run FAILED, instead of dying quietly for weeks.
             app.logger.warning("capture: could not load %s: %s", slug, ex)
+            errors.append(f"{slug}: {ex}")
             continue
         for g in games:
             games_seen += 1
@@ -612,7 +643,8 @@ def run_capture(slugs: list) -> dict:
                 snapshot_closing(g["id"], parsed, g.get("date"))
                 closed += 1
     return {"sports": slugs, "games_seen": games_seen,
-            "opens_recorded": opened, "closes_updated": closed}
+            "opens_recorded": opened, "closes_updated": closed,
+            "errors": errors}
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────

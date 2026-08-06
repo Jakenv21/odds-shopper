@@ -1,3 +1,25 @@
+# ============================================================================
+# odds-shopper — Render blueprint
+#
+# Env vars marked `sync: false` are NEVER read from git. After the blueprint
+# creates these services you must paste them into EACH service's Environment
+# tab in the Render dashboard: SUPABASE_URL, SUPABASE_KEY, ODDS_API_KEY.
+# (The web service also takes CAPTURE_TOKEN.) See DEPLOY.md.
+#
+# CREDIT BUDGET (The Odds API bills markets x regions = 3 credits per call):
+#   ncaaf-sunday (opens)   24 runs/wk  x3 =  72 credits/wk
+#   ncaaf-sat    (closes)  36 runs/wk  x3 = 108 credits/wk
+#   ncaaf-late   (closes)  24 runs/wk  x3 =  72 credits/wk
+#                                    NCAAF total ~1,090 credits/month
+#   nflpre-open   1 run/day   x3 =   3 credits/day
+#   nflpre-close 15 runs/day  x3 =  45 credits/day  (August only, ~1,150 total)
+#
+# The free tier is 500 credits/month and will NOT cover this. Either move to a
+# paid Odds API plan, or leave ODDS_API_KEY unset on the cron services to fall
+# back to free ActionNetwork data (~15-30 min delayed close, but MORE books:
+# it adds Caesars + bet365). See DEPLOY.md "Choosing your data plan".
+# ============================================================================
+
 services:
   # ── Web app: interactive line shopper ──────────────────────────────────────
   - type: web
@@ -13,27 +35,11 @@ services:
       - key: SUPABASE_KEY
         sync: false
       - key: CAPTURE_TOKEN
-        sync: false        # optional: lets you hit /api/capture manually to test
+        sync: false        # lets you hit /api/capture manually to smoke-test
 
-  # ── Cron: daily baseline — all main sports, 8am EST (13:00 UTC) ────────────
-  - type: cron
-    name: odds-shopper-capture-daily
-    env: python
-    schedule: "0 13 * * *"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python capture_cron.py
-    envVars:
-      - key: ODDS_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: CAPTURE_SPORTS
-        value: ncaaf,nfl,nba,ncaab,mlb,nhl
-
-  # ── Cron: NCAAF hourly all Sunday — catches new lines as books post them ───
-  # Next week's college lines typically release any time Sunday
+  # ── NCAAF opens: hourly all Sunday ─────────────────────────────────────────
+  # Next week's college lines drop at unpredictable times on Sunday. Hourly
+  # coverage is what makes the recorded "open" the real open.
   - type: cron
     name: odds-shopper-capture-ncaaf-sunday
     env: python
@@ -50,44 +56,9 @@ services:
       - key: CAPTURE_SPORTS
         value: ncaaf
 
-  # ── Cron: NFL Sunday evening — lines release after afternoon games end ──────
-  # 23:00 UTC Sun ≈ 6pm EST / 7pm EDT
-  - type: cron
-    name: odds-shopper-capture-nfl-sunday
-    env: python
-    schedule: "0 23 * * 0"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python capture_cron.py
-    envVars:
-      - key: ODDS_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: CAPTURE_SPORTS
-        value: nfl
-
-  # ── Cron: NFL Monday morning — hourly midnight through 10am EST ─────────────
-  # 00:00–15:00 UTC Mon ≈ 7pm Sun–10am Mon EST (lines continue updating overnight)
-  - type: cron
-    name: odds-shopper-capture-nfl-monday
-    env: python
-    schedule: "0 0-15 * * 1"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python capture_cron.py
-    envVars:
-      - key: ODDS_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: CAPTURE_SPORTS
-        value: nfl
-
-  # ── Cron: NCAAF closing lines — Saturday game window (every 15 min) ─────────
-  # UTC 15:00–23:45 Sat ≈ 10am–7pm EST / 11am–8pm EDT
+  # ── NCAAF closes: Saturday game window, every 15 min ───────────────────────
+  # UTC 15:00-23:45 Sat ≈ 11am-7:45pm ET. The last snapshot before kickoff is
+  # the close, so frequency here is what determines CLV grading accuracy.
   - type: cron
     name: odds-shopper-capture-sat
     env: python
@@ -104,8 +75,8 @@ services:
       - key: CAPTURE_SPORTS
         value: ncaaf
 
-  # ── Cron: NCAAF closing lines — late West Coast games into Sunday UTC ───────
-  # UTC 00:00–05:45 Sun ≈ 7pm Sat–1am Sun EST
+  # ── NCAAF closes: late West Coast games, into Sunday UTC ───────────────────
+  # UTC 00:00-05:45 Sun ≈ 8pm Sat-1:45am ET.
   - type: cron
     name: odds-shopper-capture-late
     env: python
@@ -121,3 +92,93 @@ services:
         sync: false
       - key: CAPTURE_SPORTS
         value: ncaaf
+
+  # ── NFL PRESEASON opens: once daily ────────────────────────────────────────
+  # Preseason runs early Aug through late Aug. Low-volume opens capture, and it
+  # doubles as a live end-to-end test of the whole pipeline before CFB Week 0.
+  - type: cron
+    name: odds-shopper-capture-nflpre-open
+    env: python
+    schedule: "0 13 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python capture_cron.py
+    envVars:
+      - key: ODDS_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: CAPTURE_SPORTS
+        value: nflpre
+
+  # ── NFL PRESEASON closes: evening kickoff window, every 20 min ─────────────
+  # UTC 22:00-23:59 + 00:00-02:59 ≈ 6pm-11pm ET, covering the 7pm/8pm ET slate.
+  - type: cron
+    name: odds-shopper-capture-nflpre-close
+    env: python
+    schedule: "*/20 22-23,0-2 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python capture_cron.py
+    envVars:
+      - key: ODDS_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: CAPTURE_SPORTS
+        value: nflpre
+
+# ── DISABLED: NFL regular season + all-sports daily ──────────────────────────
+# Left here intentionally, commented out, so the blueprint does NOT create them
+# and burn credits during college season. Uncomment the NFL ones in September
+# if you start betting NFL sides.
+#
+#  - type: cron
+#    name: odds-shopper-capture-nfl-sunday
+#    env: python
+#    schedule: "0 23 * * 0"
+#    buildCommand: pip install -r requirements.txt
+#    startCommand: python capture_cron.py
+#    envVars:
+#      - key: ODDS_API_KEY
+#        sync: false
+#      - key: SUPABASE_URL
+#        sync: false
+#      - key: SUPABASE_KEY
+#        sync: false
+#      - key: CAPTURE_SPORTS
+#        value: nfl
+#
+#  - type: cron
+#    name: odds-shopper-capture-nfl-monday
+#    env: python
+#    schedule: "0 0-15 * * 1"
+#    buildCommand: pip install -r requirements.txt
+#    startCommand: python capture_cron.py
+#    envVars:
+#      - key: ODDS_API_KEY
+#        sync: false
+#      - key: SUPABASE_URL
+#        sync: false
+#      - key: SUPABASE_KEY
+#        sync: false
+#      - key: CAPTURE_SPORTS
+#        value: nfl
+#
+#  - type: cron
+#    name: odds-shopper-capture-daily
+#    env: python
+#    schedule: "0 13 * * *"
+#    buildCommand: pip install -r requirements.txt
+#    startCommand: python capture_cron.py
+#    envVars:
+#      - key: ODDS_API_KEY
+#        sync: false
+#      - key: SUPABASE_URL
+#        sync: false
+#      - key: SUPABASE_KEY
+#        sync: false
+#      - key: CAPTURE_SPORTS
+#        value: ncaaf,nfl,nba,ncaab,mlb,nhl

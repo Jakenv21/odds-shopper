@@ -22,20 +22,28 @@
 
 services:
   # ── Web app: interactive line shopper ──────────────────────────────────────
-  - type: web
-    name: odds-shopper
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
-    envVars:
-      - key: ODDS_API_KEY
-        sync: false        # paste in the Render dashboard — never committed to git
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: CAPTURE_TOKEN
-        sync: false        # lets you hit /api/capture manually to smoke-test
+  # NOT managed by this blueprint. The web service was created by hand before the
+  # blueprint ever ran, and it is live at odds-shopper.onrender.com. Declaring it
+  # here would collide on the name, and renaming the existing one to resolve that
+  # would move its public URL. The web app is also irrelevant to capture — the crons
+  # write to Supabase directly and never call it — so leaving it out costs nothing.
+  # Re-enable this block only if you want the blueprint to own the web service too,
+  # which means deleting or renaming the hand-made one first.
+  #
+  #  - type: web
+  #    name: odds-shopper
+  #    env: python
+  #    buildCommand: pip install -r requirements.txt
+  #    startCommand: gunicorn app:app
+  #    envVars:
+  #      - key: ODDS_API_KEY
+  #        sync: false
+  #      - key: SUPABASE_URL
+  #        sync: false
+  #      - key: SUPABASE_KEY
+  #        sync: false
+  #      - key: CAPTURE_TOKEN
+  #        sync: false
 
   # ── NCAAF opens: hourly all Sunday ─────────────────────────────────────────
   # Next week's college lines drop at unpredictable times on Sunday. Hourly

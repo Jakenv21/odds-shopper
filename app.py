@@ -643,7 +643,7 @@ def run_capture(slugs: list) -> dict:
     """Snapshot opens (once) and closes (rolling, pre-kickoff only) for the given sports.
     Force-refreshes odds so the close reflects the latest pre-kickoff number, not cache."""
     now_ts = time.time()
-    opened = closed = games_seen = 0
+    opened = closed = games_seen = bettable = 0
     errors = []
     write_errors: set = set()
     if not slugs:
@@ -668,7 +668,9 @@ def run_capture(slugs: list) -> dict:
                 pass
             parsed = parse_odds(g)
             if not parsed["best_bets"]:
+                # No lines posted yet - not a failure, just nothing to record.
                 continue
+            bettable += 1
             ok, err = snapshot_opening(g["id"], parsed, g.get("date"))
             if ok:
                 opened += 1
@@ -686,6 +688,7 @@ def run_capture(slugs: list) -> dict:
     errors.extend(sorted(write_errors))
     return {"sports": slugs, "games_seen": games_seen,
             "opens_recorded": opened, "closes_updated": closed,
+            "bettable_games": bettable,
             "write_failures": len(write_errors),
             "errors": errors}
 

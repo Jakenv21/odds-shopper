@@ -38,9 +38,11 @@ if __name__ == "__main__":
             print("  -", e)
         sys.exit(1)
 
-    # A run that touches games but banks nothing is a failure even with no exception —
-    # that is exactly the shape the RLS lockdown took.
-    if result.get("games_seen") and not result.get("opens_recorded"):
-        print("[capture] FAILED: saw", result["games_seen"],
-              "games but recorded 0 opens - nothing was written.")
+    # A run that had real lines to record but banked nothing is a failure even with no
+    # exception - exactly the shape the RLS lockdown took. Gate on bettable_games, not
+    # games_seen: a slate with no lines posted yet is a legitimate zero, and failing on
+    # it would just train you to ignore these alerts.
+    if result.get("bettable_games") and not result.get("opens_recorded"):
+        print("[capture] FAILED:", result["bettable_games"],
+              "games had lines but 0 opens were recorded - nothing was written.")
         sys.exit(1)

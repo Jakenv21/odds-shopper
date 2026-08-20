@@ -31,13 +31,33 @@ def _clean_env(key):
 # corrupted earlier dashboard pastes, which is what the old hardcoded fallback worked around.
 _SB_URL_DEFAULT = "https://pasedeakyktwhsumltkz.supabase.co"
 
+def _sb_key_role(key: str) -> str:
+    """Read the role claim out of a Supabase JWT without validating or logging it.
+
+    RLS is on, so the anon key can authenticate fine and then be denied on every
+    write. Naming the role up front turns that into a startup error instead of a
+    weekend of empty captures. Unknown/new-style keys return "" and are left alone.
+    """
+    try:
+        import base64, json
+        payload = key.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload)).get("role", "")
+    except Exception:
+        return ""
+
 try:
     from supabase import create_client as _sb_create
     _SB_URL = _clean_env("SUPABASE_URL") or _SB_URL_DEFAULT
     _SB_KEY = _clean_env("SUPABASE_KEY")
+    _SB_ROLE = _sb_key_role(_SB_KEY)
     _sb = _sb_create(_SB_URL, _SB_KEY) if _SB_KEY else None
 except Exception:
     _sb = None
+    _SB_ROLE = ""
+
+# Writes need service_role now that line_snapshots has RLS on with zero policies.
+SB_KEY_IS_READONLY = _SB_ROLE == "anon"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -533,35 +553,47 @@ def _snapshot_rows(game_id: str, parsed: dict, phase: str,
 
 
 def snapshot_opening(game_id: str, parsed: dict, commence_time=None):
-    """Store first-seen lines as the OPEN. ignore_duplicates keeps the first write."""
+    """Store first-seen lines as the OPEN. ignore_duplicates keeps the first write.
+
+    Returns (ok, error). ok is False only when a write was attempted and failed, so
+    the caller can refuse to count the game as recorded. Counting games instead of
+    successful writes is what let RLS silently eat every snapshot while the cron
+    still reported 99 opens and exited 0.
+    """
     if not _sb:
-        return
+        return False, "supabase not configured"
     rows = _snapshot_rows(game_id, parsed, "open", commence_time)
     if not rows:
-        return
+        return True, None
     try:
         _sb.table("line_snapshots").upsert(
             rows, on_conflict="game_id,book,market,side,phase", ignore_duplicates=True
         ).execute()
+        return True, None
     except Exception as ex:
         app.logger.warning("Supabase opening snapshot failed: %s", ex)
+        return False, f"open write failed: {ex}"
 
 
 def snapshot_closing(game_id: str, parsed: dict, commence_time=None):
     """Overwrite the CLOSE row each run. The last write before kickoff = the true close,
-    so this MUST only be called while the game has not yet started."""
+    so this MUST only be called while the game has not yet started.
+
+    Returns (ok, error) — see snapshot_opening."""
     if not _sb:
-        return
+        return False, "supabase not configured"
     now_iso = datetime.now(timezone.utc).isoformat()
     rows = _snapshot_rows(game_id, parsed, "close", commence_time, captured_at=now_iso)
     if not rows:
-        return
+        return True, None
     try:
         _sb.table("line_snapshots").upsert(
             rows, on_conflict="game_id,book,market,side,phase"  # no ignore_duplicates -> overwrite
         ).execute()
+        return True, None
     except Exception as ex:
         app.logger.warning("Supabase closing snapshot failed: %s", ex)
+        return False, f"close write failed: {ex}"
 
 
 def get_opening_lines(game_id: str) -> dict:
@@ -613,6 +645,7 @@ def run_capture(slugs: list) -> dict:
     now_ts = time.time()
     opened = closed = games_seen = 0
     errors = []
+    write_errors: set = set()
     if not slugs:
         errors.append("no sports resolved — check CAPTURE_SPORTS")
     for slug in slugs:
@@ -636,14 +669,24 @@ def run_capture(slugs: list) -> dict:
             parsed = parse_odds(g)
             if not parsed["best_bets"]:
                 continue
-            snapshot_opening(g["id"], parsed, g.get("date"))
-            opened += 1
+            ok, err = snapshot_opening(g["id"], parsed, g.get("date"))
+            if ok:
+                opened += 1
+            elif err:
+                write_errors.add(err)
             # Only update the close while the game is still in the future.
             if start_ts is None or start_ts > now_ts:
-                snapshot_closing(g["id"], parsed, g.get("date"))
-                closed += 1
+                ok, err = snapshot_closing(g["id"], parsed, g.get("date"))
+                if ok:
+                    closed += 1
+                elif err:
+                    write_errors.add(err)
+    # One error per distinct cause, not one per game — a bad key fails all 99 games
+    # identically and 198 copies of the same line just buries it.
+    errors.extend(sorted(write_errors))
     return {"sports": slugs, "games_seen": games_seen,
             "opens_recorded": opened, "closes_updated": closed,
+            "write_failures": len(write_errors),
             "errors": errors}
 
 
@@ -672,6 +715,11 @@ def get_info():
         "supabase":    sb_status,
         "sb_url_set":  sb_url_ok,
         "sb_key_hint": sb_key_preview,
+        # The status probe above is a SELECT, so it can read "ok" on a key that is
+        # denied on every INSERT. The role is the only unambiguous answer to
+        # "can this service actually capture?", and it is not a secret.
+        "sb_key_role": _SB_ROLE or "unknown",
+        "can_write":   not SB_KEY_IS_READONLY,
     })
 
 

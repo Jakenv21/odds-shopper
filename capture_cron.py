@@ -15,11 +15,17 @@ before a whole weekend of closing lines is lost.
 """
 import sys
 
-from app import _sb, run_capture, resolve_capture_slugs
+from app import _sb, SB_KEY_IS_READONLY, run_capture, resolve_capture_slugs
 
 if __name__ == "__main__":
     if _sb is None:
-        print("[capture] FATAL: Supabase not configured — set SUPABASE_URL / SUPABASE_KEY")
+        print("[capture] FATAL: Supabase not configured - set SUPABASE_URL / SUPABASE_KEY")
+        sys.exit(1)
+
+    if SB_KEY_IS_READONLY:
+        print("[capture] FATAL: SUPABASE_KEY is the anon key. RLS is on with zero "
+              "policies, so every write will be denied (42501). Set the service_role "
+              "key from Supabase -> Project Settings -> API Keys.")
         sys.exit(1)
 
     result = run_capture(resolve_capture_slugs())
@@ -30,4 +36,11 @@ if __name__ == "__main__":
         print(f"[capture] FAILED with {len(errors)} error(s):")
         for e in errors:
             print("  -", e)
+        sys.exit(1)
+
+    # A run that touches games but banks nothing is a failure even with no exception —
+    # that is exactly the shape the RLS lockdown took.
+    if result.get("games_seen") and not result.get("opens_recorded"):
+        print("[capture] FAILED: saw", result["games_seen"],
+              "games but recorded 0 opens - nothing was written.")
         sys.exit(1)

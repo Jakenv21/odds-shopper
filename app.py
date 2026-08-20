@@ -73,10 +73,10 @@ FRIENDLY_TO_OA = {
     "nfl":    "americanfootball_nfl",
     "nflpre": "americanfootball_nfl_preseason",
     "ncaaf":  "americanfootball_ncaaf",
-    "nba":    "basketball_nba",
-    "ncaab":  "basketball_ncaab",
+    # "nba":    "basketball_nba",
+    # "ncaab":  "basketball_ncaab",
     "mlb":    "baseball_mlb",
-    "nhl":    "icehockey_nhl",
+    # "nhl":    "icehockey_nhl",
 }
 
 # ActionNetwork has no separate preseason feed — preseason games ride along in the
@@ -97,10 +97,10 @@ AN_BOOKS = {
 AN_SPORTS = {
     "nfl":   "NFL",
     "ncaaf": "NCAAF",
-    "nba":   "NBA",
-    "ncaab": "NCAAB",
+    # "nba":   "NBA",      # off 2026-08-20
+    # "ncaab": "NCAAB",    # off 2026-08-20
     "mlb":   "MLB",
-    "nhl":   "NHL",
+    # "nhl":   "NHL",      # off 2026-08-20
 }
 
 # The Odds API
@@ -118,12 +118,12 @@ OA_SPORTS = {
     "americanfootball_nfl":           "NFL",
     "americanfootball_nfl_preseason": "NFL Preseason",
     "americanfootball_ncaaf": "NCAAF",
-    "basketball_nba":         "NBA",
-    "basketball_ncaab":       "NCAAB",
+    # "basketball_nba":         "NBA",      # off 2026-08-20 - not bet, costs 3 credits/load
+    # "basketball_ncaab":       "NCAAB",    # off 2026-08-20 - re-enable for CBB season
     "baseball_mlb":           "MLB",
-    "icehockey_nhl":          "NHL",
-    "soccer_fifa_world_cup":  "World Cup",
-    "soccer_usa_mls":         "MLS",
+    # "icehockey_nhl":          "NHL",      # off 2026-08-20
+    # "soccer_fifa_world_cup":  "World Cup",  # off 2026-08-20
+    # "soccer_usa_mls":         "MLS",     # off 2026-08-20
 }
 OA_TO_AN_SLUG = {
     "americanfootball_nfl":           "nfl",

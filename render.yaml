@@ -1,6 +1,10 @@
 # ============================================================================
 # odds-shopper — Render blueprint
 #
+# LIVE as blueprint instance "clv-logger" (created 2026-08-20). It owns the five
+# capture crons below plus the clv-secrets env group. The odds-shopper WEB service
+# is NOT part of this blueprint -- it predates it and is managed by hand.
+#
 # Env vars marked `sync: false` are NEVER read from git. After the blueprint
 # creates these services you must paste them into EACH service's Environment
 # tab in the Render dashboard: SUPABASE_URL, SUPABASE_KEY, ODDS_API_KEY.

@@ -20,6 +20,24 @@
 # it adds Caesars + bet365). See DEPLOY.md "Choosing your data plan".
 # ============================================================================
 
+envVarGroups:
+  # Pasted ONCE at blueprint creation and linked to every cron below. This repo has
+  # already lost time to a corrupted Render env var paste (see commit dd9163a), and
+  # pasting a 219-char service_role key five times is five chances to repeat that.
+  # It is also the single place to rotate the key -- which matters, because the anon
+  # key that used to live here is public in this repo's history.
+  - name: clv-secrets
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false     # service_role, NOT anon -- anon cannot write once RLS is on
+
+# ODDS_API_KEY is deliberately absent. The free-tier balance is exhausted (500/500 on
+# 2026-08-17), and a set-but-dead key makes every call 401 and the cron exit FAILED.
+# Leaving it unset falls back to ActionNetwork, which works. To re-enable later, add
+# it to a service in the dashboard or back into this file.
+
 services:
   # ── Web app: interactive line shopper ──────────────────────────────────────
   # NOT managed by this blueprint. The web service was created by hand before the
@@ -55,12 +73,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python capture_cron.py
     envVars:
-      - key: ODDS_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
+      - fromGroup: clv-secrets
       - key: CAPTURE_SPORTS
         value: ncaaf
 
@@ -74,12 +87,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python capture_cron.py
     envVars:
-      - key: ODDS_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
+      - fromGroup: clv-secrets
       - key: CAPTURE_SPORTS
         value: ncaaf
 
@@ -92,12 +100,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python capture_cron.py
     envVars:
-      - key: ODDS_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
+      - fromGroup: clv-secrets
       - key: CAPTURE_SPORTS
         value: ncaaf
 
@@ -111,12 +114,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python capture_cron.py
     envVars:
-      - key: ODDS_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
+      - fromGroup: clv-secrets
       - key: CAPTURE_SPORTS
         value: nflpre
 
@@ -129,12 +127,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python capture_cron.py
     envVars:
-      - key: ODDS_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
+      - fromGroup: clv-secrets
       - key: CAPTURE_SPORTS
         value: nflpre
 

@@ -389,6 +389,15 @@ def parse_odds(game: dict) -> dict:
                     elif mkey == "totals":
                         add_total(bname, name.lower(), point, price)
 
+    # AN rows without the line_status marker are stale leftovers, not live
+    # numbers — AN's whole DraftKings NCAAF feed serves them (verified
+    # 2026-08-20: DK held total 55.5 on a market at 60.5, 36/99 games 2+ pts
+    # off). Storing them as "closes" would corrupt every CLV grade at that
+    # book, so they are dropped here at ingestion.
+    def _an_stale(o):
+        return (o.get("line_status") != "normal"
+                or o.get("is_live") or o.get("is_alt_market"))
+
     # ── Format A: ActionNetwork (book_id dict) — also runs as OA supplement ──
     if markets and isinstance(next(iter(markets.values()), None), dict):
         for book_id_str, book_data in markets.items():
@@ -401,17 +410,22 @@ def parse_odds(game: dict) -> dict:
             bname = AN_BOOKS[bid]
             event = book_data.get("event") or book_data
             for o in (event.get("spread") or []):
-                add_spread(bname, o.get("side", ""), o.get("value"), o.get("odds"))
+                if not _an_stale(o):
+                    add_spread(bname, o.get("side", ""), o.get("value"), o.get("odds"))
             for o in (event.get("total") or []):
-                add_total(bname, o.get("side", ""), o.get("value"), o.get("odds"))
+                if not _an_stale(o):
+                    add_total(bname, o.get("side", ""), o.get("value"), o.get("odds"))
             for o in (event.get("moneyline") or []):
-                add_ml(bname, o.get("side", ""), o.get("odds"))
+                if not _an_stale(o):
+                    add_ml(bname, o.get("side", ""), o.get("odds"))
 
     # ── Format B: ActionNetwork (flat list) ───────────────────────────────────
     elif isinstance(markets, list):
         for o in markets:
             bid = o.get("book_id")
             if bid not in AN_BOOKS:
+                continue
+            if _an_stale(o):
                 continue
             bname  = AN_BOOKS[bid]
             mtype  = o.get("type", "")

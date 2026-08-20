@@ -75,7 +75,7 @@ FRIENDLY_TO_OA = {
     "ncaaf":  "americanfootball_ncaaf",
     # "nba":    "basketball_nba",
     # "ncaab":  "basketball_ncaab",
-    "mlb":    "baseball_mlb",
+    # "mlb":    "baseball_mlb",
     # "nhl":    "icehockey_nhl",
 }
 
@@ -99,7 +99,7 @@ AN_SPORTS = {
     "ncaaf": "NCAAF",
     # "nba":   "NBA",      # off 2026-08-20
     # "ncaab": "NCAAB",    # off 2026-08-20
-    "mlb":   "MLB",
+    # "mlb":   "MLB",      # off 2026-08-20
     # "nhl":   "NHL",      # off 2026-08-20
 }
 
@@ -120,7 +120,7 @@ OA_SPORTS = {
     "americanfootball_ncaaf": "NCAAF",
     # "basketball_nba":         "NBA",      # off 2026-08-20 - not bet, costs 3 credits/load
     # "basketball_ncaab":       "NCAAB",    # off 2026-08-20 - re-enable for CBB season
-    "baseball_mlb":           "MLB",
+    # "baseball_mlb":           "MLB",     # off 2026-08-20 - Jake bets MLB but does not shop it here
     # "icehockey_nhl":          "NHL",      # off 2026-08-20
     # "soccer_fifa_world_cup":  "World Cup",  # off 2026-08-20
     # "soccer_usa_mls":         "MLS",     # off 2026-08-20

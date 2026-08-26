@@ -14,7 +14,9 @@
 #   ncaaf-sunday (opens)   24 runs/wk  x3 =  72 credits/wk
 #   ncaaf-sat    (closes)  36 runs/wk  x3 = 108 credits/wk
 #   ncaaf-late   (closes)  24 runs/wk  x3 =  72 credits/wk
-#                                    NCAAF total ~1,090 credits/month
+#   ncaaf-weeknight (closes)  12 runs/wk  x3 =  36 credits/wk  Thu/Fri pre-kick
+#   ncaaf-wknt-late (closes)  12 runs/wk  x3 =  36 credits/wk  Thu/Fri late
+#                                    NCAAF total ~1,400 credits/month
 #   nflpre-open   1 run/day   x3 =   3 credits/day
 #   nflpre-close 15 runs/day  x3 =  45 credits/day  (August only, ~1,150 total)
 #
@@ -101,6 +103,38 @@ services:
     name: odds-shopper-capture-late
     env: python
     schedule: "*/15 0-5 * * 0"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python capture_cron.py
+    envVars:
+      - fromGroup: clv-secrets
+      - key: CAPTURE_SPORTS
+        value: ncaaf
+
+  # ── NCAAF closes: weeknight pre-kick (Thu/Fri) ─────────────────────────────
+  # Thu/Fri night games run all season and had NO close capture before this —
+  # they graded against the previous Saturday's stale snapshot, silently
+  # corrupting CLV for every weeknight bet. UTC 22:00-23:40 Thu/Fri
+  # ≈ 6:00-7:40pm ET, which brackets the typical 7:00/7:30pm ET kick.
+  # 20-min interval (vs 15 on Saturday) is the cost/accuracy trade: weeknight
+  # slates are 1-4 games, so the board moves less between snapshots.
+  - type: cron
+    name: odds-shopper-capture-weeknight
+    env: python
+    schedule: "*/20 22-23 * * 4,5"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python capture_cron.py
+    envVars:
+      - fromGroup: clv-secrets
+      - key: CAPTURE_SPORTS
+        value: ncaaf
+
+  # ── NCAAF closes: weeknight late window, past midnight UTC ─────────────────
+  # UTC 00:00-01:40 Fri/Sat ≈ 8:00-9:40pm ET Thu/Fri. Catches later kicks and
+  # the true close for anything that kicked at 8pm ET or after.
+  - type: cron
+    name: odds-shopper-capture-weeknight-late
+    env: python
+    schedule: "*/20 0-1 * * 5,6"
     buildCommand: pip install -r requirements.txt
     startCommand: python capture_cron.py
     envVars:

@@ -2,7 +2,13 @@
 """
 Odds Shopper — CLI version
 Data: ActionNetwork public API (free, no key needed)
-Books: FanDuel, DraftKings, BetMGM, Caesars, bet365, ESPN Bet, BetRivers
+Books: Pennsylvania sportsbooks — FanDuel PA, DK PA, BetMGM PA, Caesars PA,
+       bet365 PA, BetRivers PA, Parx, Fanatics PA
+
+Book IDs verified against https://api.actionnetwork.com/web/v1/books on
+2026-08-25. Do not guess these — the default scoreboard payload returns only
+NJ/NV books plus Open/Consensus, so the PA books must be requested explicitly
+via the `bookIds` query param.
 
 Usage:
   python odds_shopper.py                  # interactive
@@ -18,15 +24,30 @@ from difflib import SequenceMatcher
 
 BASE_URL = "https://api.actionnetwork.com/web/v2/scoreboard"
 
+# Bettable books — these are the only rows eligible for a BEST marker.
+# PA variant chosen wherever the book has one (Jake bets from Westmoreland County).
 BOOKS = {
-    15:  "FanDuel",
-    30:  "DraftKings",
-    49:  "BetMGM",
-    68:  "Caesars",
-    69:  "bet365",
-    71:  "theScore",
-    75:  "BetRivers",
+    255:  "FanDuel PA",
+    1534: "DK PA",
+    280:  "BetMGM PA",
+    1906: "Caesars PA",
+    3547: "bet365 PA",
+    122:  "BetRivers PA",
+    74:   "Parx",
+    2791: "Fanatics PA",
 }
+
+# Reference-only rows. These are NOT books you can bet — 30 is the opening
+# line and 15/67 are aggregates across books. They are displayed in their own
+# labeled block and are never eligible for a BEST marker.
+REFERENCE_BOOKS = {
+    30: "Open",
+    15: "Consensus",
+    67: "SIConsensus",
+}
+
+ALL_BOOKS = {**BOOKS, **REFERENCE_BOOKS}
+BOOK_IDS_PARAM = ",".join(str(b) for b in ALL_BOOKS)
 
 SPORTS = {
     "nfl":   "NFL",
@@ -63,7 +84,8 @@ def fetch_sport(slug):
     if cached is not None:
         return cached
 
-    resp = SESSION.get(f"{BASE_URL}/{slug}", timeout=15)
+    resp = SESSION.get(f"{BASE_URL}/{slug}",
+                       params={"bookIds": BOOK_IDS_PARAM}, timeout=15)
     resp.raise_for_status()
     data  = resp.json()
     games = data.get("games") or []
@@ -109,6 +131,11 @@ def load_all():
 
 
 def parse_odds(game):
+    """Returns (spreads, totals) keyed by book name — includes reference rows.
+
+    Callers must split bettable vs reference with is_reference() before doing
+    any best-number comparison.
+    """
     markets = game.get("markets") or {}
     spreads: dict = {}
     totals:  dict = {}
@@ -144,9 +171,9 @@ def parse_odds(game):
                 bid = int(bid_str)
             except ValueError:
                 continue
-            if bid not in BOOKS:
+            if bid not in ALL_BOOKS:
                 continue
-            bname = BOOKS[bid]
+            bname = ALL_BOOKS[bid]
             event = bdata.get("event") or bdata
             for o in (event.get("spread") or []):
                 add_spread(bname, o.get("side",""), o.get("value"), o.get("odds"))
@@ -155,9 +182,9 @@ def parse_odds(game):
     elif isinstance(markets, list):
         for o in markets:
             bid = o.get("book_id")
-            if bid not in BOOKS:
+            if bid not in ALL_BOOKS:
                 continue
-            bname = BOOKS[bid]
+            bname = ALL_BOOKS[bid]
             t = o.get("type","")
             if o.get("period","event") not in ("event","game","full"):
                 continue
@@ -170,6 +197,21 @@ def parse_odds(game):
                if v["away_pt"] is not None and v["home_pt"] is not None}
     totals  = {b: v for b, v in totals.items() if v["total"] is not None}
     return spreads, totals
+
+
+REFERENCE_NAMES = set(REFERENCE_BOOKS.values())
+
+
+def is_reference(book_name):
+    """True for Open / Consensus rows — display only, never a BEST candidate."""
+    return book_name in REFERENCE_NAMES
+
+
+def split_books(d):
+    """Split a {book_name: data} dict into (bettable, reference)."""
+    bettable  = {b: v for b, v in d.items() if not is_reference(b)}
+    reference = {b: v for b, v in d.items() if is_reference(b)}
+    return bettable, reference
 
 
 def similarity(a, b):
@@ -217,6 +259,8 @@ def display_game(game):
     gtime = fmt_time(game["date"])
 
     spreads, totals = parse_odds(game)
+    sp_books, sp_ref = split_books(spreads)
+    to_books, to_ref = split_books(totals)
 
     print()
     print("=" * 68)
@@ -226,43 +270,62 @@ def display_game(game):
 
     if spreads:
         print(f"\n  SPREADS")
-        away_pts  = [v["away_pt"] for v in spreads.values() if v["away_pt"] is not None]
-        home_pts  = [v["home_pt"] for v in spreads.values() if v["home_pt"] is not None]
+        # Best numbers come from bettable books only — never Open/Consensus.
+        away_pts  = [v["away_pt"] for v in sp_books.values() if v["away_pt"] is not None]
+        home_pts  = [v["home_pt"] for v in sp_books.values() if v["home_pt"] is not None]
         best_away = max(away_pts) if away_pts else None
         best_home = max(home_pts) if home_pts else None
 
-        rows = sorted(spreads.items(), key=lambda kv: -(kv[1]["away_pt"] or 0))
         aw = away[:14]
         hw = home[:14]
         print(f"  {'Book':<20}  {aw:<18}  {hw}")
         print(f"  {'-'*60}")
-        for book, v in rows:
+
+        def spread_row(book, v, flagged):
             a_str = f"{fmt_pt(v['away_pt'])} ({v['away_px'] or '—'})"
             h_str = f"{fmt_pt(v['home_pt'])} ({v['home_px'] or '—'})"
-            flag  = ""
-            if v["away_pt"] == best_away:
-                flag = "  <-- BEST AWAY"
-            elif v["home_pt"] == best_home:
-                flag = "  <-- BEST HOME"
+            flags = []
+            if flagged:
+                if v["away_pt"] is not None and v["away_pt"] == best_away:
+                    flags.append("BEST AWAY")
+                if v["home_pt"] is not None and v["home_pt"] == best_home:
+                    flags.append("BEST HOME")
+            flag = f"  <-- {' | '.join(flags)}" if flags else ""
             print(f"  {book:<20}  {a_str:<18}  {h_str}{flag}")
+
+        for book, v in sorted(sp_books.items(), key=lambda kv: -(kv[1]["away_pt"] or 0)):
+            spread_row(book, v, True)
+        if sp_ref:
+            print(f"  {'-- reference (not bettable) --':<20}")
+            for book, v in sorted(sp_ref.items()):
+                spread_row(book, v, False)
 
     if totals:
         print(f"\n  TOTALS")
-        pts        = [v["total"] for v in totals.values() if v["total"] is not None]
+        pts        = [v["total"] for v in to_books.values() if v["total"] is not None]
         best_over  = min(pts) if pts else None
         best_under = max(pts) if pts else None
 
-        rows = sorted(totals.items(), key=lambda kv: kv[1]["total"] or 0)
         print(f"  {'Book':<20}  {'Total':>7}  {'Over':>8}  {'Under':>8}")
         print(f"  {'-'*52}")
-        for book, v in rows:
-            flag = ""
-            if v["total"] == best_over:
-                flag = "  <-- BEST OVER"
-            elif v["total"] == best_under:
-                flag = "  <-- BEST UNDER"
+
+        def total_row(book, v, flagged):
+            flags = []
+            if flagged:
+                if v["total"] == best_over:
+                    flags.append("BEST OVER")
+                if v["total"] == best_under:
+                    flags.append("BEST UNDER")
+            flag = f"  <-- {' | '.join(flags)}" if flags else ""
             print(f"  {book:<20}  {fmt_pt(v['total']):>7}  "
                   f"{v['over_px'] or '—':>8}  {v['under_px'] or '—':>8}{flag}")
+
+        for book, v in sorted(to_books.items(), key=lambda kv: kv[1]["total"] or 0):
+            total_row(book, v, True)
+        if to_ref:
+            print(f"  {'-- reference (not bettable) --':<20}")
+            for book, v in sorted(to_ref.items()):
+                total_row(book, v, False)
 
     if not spreads and not totals:
         print("\n  No lines posted yet for this game.")

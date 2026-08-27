@@ -65,18 +65,28 @@ create index if not exists bets_source_idx on bets (source);
 create index if not exists bets_placed_idx on bets (placed_at);
 
 -- ============================================================================
--- SECURITY — NOT YET APPLIED. Read DEPLOY.md "Lock down the database" first.
--- Both tables currently have RLS disabled, which means anyone holding the anon
--- key can read or delete every row. The anon key is in this repo's git history.
+-- SECURITY — APPLIED 2026-08-18 as migration
+-- `lock_down_clv_tables_rls_and_bet_clv_view`. Nothing to run here.
 --
--- Run this ONLY AFTER SUPABASE_KEY is switched to the service_role key in both
--- .env and every Render service, or the app's own writes will start failing:
+-- Both tables now have RLS enabled with ZERO policies, and anon/authenticated
+-- have had every grant revoked. service_role and postgres hold BYPASSRLS, so
+-- privileged writes are unaffected. The leaked anon key now gets a hard
+-- 42501 "permission denied" — verified against the live REST API.
 --
 --   alter table public.line_snapshots enable row level security;
 --   alter table public.bets           enable row level security;
+--   revoke all on public.line_snapshots from anon, authenticated;
+--   revoke all on public.bets           from anon, authenticated;
+--   alter view  public.bet_clv set (security_invoker = true);
+--   revoke all on public.bet_clv from anon, authenticated;
 --
--- No policies are needed: service_role bypasses RLS, and with RLS on and zero
--- policies the leaked anon key can no longer touch either table.
+-- The bet_clv view mattered: it was postgres-owned / SECURITY DEFINER, so on
+-- its own it would have kept serving every bet and line straight past the new
+-- RLS — an open side door onto the data the RLS had just locked.
+--
+-- !! CONSEQUENCE: anything holding the anon key can no longer read or write
+-- these tables. SUPABASE_KEY must be the service_role key in odds-shopper/.env
+-- (cfb-agent reads that same file) and on all 6 Render services.
 -- ============================================================================
 
 -- ============================================================================

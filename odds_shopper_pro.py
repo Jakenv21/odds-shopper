@@ -3,10 +3,13 @@
 Odds Shopper PRO — personal CLI powered by The Odds API (real-time)
 Free tier: 500 credits/month  |  Get key: https://the-odds-api.com
 
-With 30-min caching and personal use:
-  Football season (NFL + NCAAF): ~4 credits/day = ~120/month
-  All 6 sports active:           ~12 credits/day = ~360/month
-  Way under the 500 free limit.
+CREDIT COST — the old estimate in this docstring was wrong. Cost is
+[markets] x [regions] per request, and load_all() hits every sport in SPORTS:
+  3 markets x 2 regions (us + us2) = 6 credits per sport, per cold load
+  All 6 sports enabled             = 36 credits per run  (~13 runs/month)
+The 30-min cache is in-memory, so every CLI invocation is a fresh cold load.
+To cut the burn, comment sports out of SPORTS below, or drop the "us2" books
+from BOOKS (that alone halves it back to 3 credits per sport).
 
 Usage:
   python odds_shopper_pro.py              # interactive
@@ -35,19 +38,33 @@ except ImportError:
 
 BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
+# Bookmaker key -> (display name, Odds API region).
+# Verified against the-odds-api.com/sports-odds-data/bookmaker-apis.html on
+# 2026-08-25. The region matters: a book in "us2" is never returned unless
+# "us2" is in the regions param, so REGIONS is derived from this table rather
+# than hardcoded — keep them from drifting apart again.
 BOOKS = {
-    "fanduel":        "FanDuel",
-    "draftkings":     "DraftKings",
-    "betmgm":         "BetMGM",
-    "williamhill_us": "Caesars",
-    "bet365":         "bet365",
-    "betrivers":      "BetRivers",
-    "hardrockbet":    "Hard Rock",
-    "espnbet":        "ESPN Bet",
-    "pointsbetus":    "PointsBet",
-    "unibet_us":      "Unibet",
+    "fanduel":        ("FanDuel",       "us"),
+    "draftkings":     ("DraftKings",    "us"),
+    "betmgm":         ("BetMGM",        "us"),
+    "betrivers":      ("BetRivers",     "us"),
+    "williamhill_us": ("Caesars",       "us"),   # paid plans only
+    "fanatics":       ("Fanatics",      "us"),   # paid plans only
+    "betparx":        ("betPARX",       "us2"),  # PA book
+    "hardrockbet":    ("Hard Rock Bet", "us2"),
+    "espnbet":        ("theScore Bet",  "us2"),  # key unchanged; rebranded from ESPN Bet
 }
+# Removed 2026-08-25 — these keys no longer exist in the Odds API:
+#   bet365        no US-region listing (uk/eu only, not bettable from PA)
+#   pointsbetus   PointsBet US wound down after the Fanatics acquisition
+#   unibet_us     delisted
+
 BOOK_KEYS = ",".join(BOOKS.keys())
+REGIONS   = ",".join(sorted({region for _, region in BOOKS.values()}))
+MARKETS   = "h2h,spreads,totals"
+
+# Quota cost is [markets] x [regions] per request, per the Odds API docs.
+CREDITS_PER_REQUEST = len(MARKETS.split(",")) * len(REGIONS.split(","))
 
 SPORTS = {
     "americanfootball_nfl":   "NFL",
@@ -108,8 +125,8 @@ def fetch_sport(api_key: str, sport_slug: str) -> list:
 
     params = {
         "apiKey":     api_key,
-        "regions":    "us",
-        "markets":    "h2h,spreads,totals",
+        "regions":    REGIONS,
+        "markets":    MARKETS,
         "oddsFormat": "american",
         "bookmakers": BOOK_KEYS,
     }
@@ -117,7 +134,17 @@ def fetch_sport(api_key: str, sport_slug: str) -> list:
     resp = SESSION.get(f"{BASE_URL}/{sport_slug}/odds", params=params, timeout=15)
 
     if resp.status_code == 401:
-        print("\n  Invalid API key. Check your key at https://the-odds-api.com")
+        # 401 covers both a bad key and an exhausted quota — tell them apart,
+        # otherwise a used-up month reads as "your key is broken".
+        try:
+            code = (resp.json() or {}).get("error_code", "")
+        except Exception:
+            code = ""
+        if code == "OUT_OF_USAGE_CREDITS":
+            print("\n  Monthly quota used up (500/500). It resets on your billing date.")
+            print("  See usage plans at https://the-odds-api.com")
+        else:
+            print("\n  Invalid API key. Check your key at https://the-odds-api.com")
         sys.exit(1)
     if resp.status_code == 422:
         # Sport not currently active/in-season — return empty
@@ -126,11 +153,19 @@ def fetch_sport(api_key: str, sport_slug: str) -> list:
 
     resp.raise_for_status()
 
-    # Track credits from response headers
+    # Track credits from response headers. x-requests-last is the real cost of
+    # the call — one request is CREDITS_PER_REQUEST credits, not 1.
     remaining = resp.headers.get("x-requests-remaining")
     if remaining is not None:
-        _credits_remaining = int(remaining)
-    _credits_used_session += 1
+        try:
+            _credits_remaining = int(remaining)
+        except ValueError:
+            pass
+    last = resp.headers.get("x-requests-last")
+    try:
+        _credits_used_session += int(last)
+    except (TypeError, ValueError):
+        _credits_used_session += CREDITS_PER_REQUEST
 
     data   = resp.json()
     now_ts = time.time()
@@ -196,7 +231,8 @@ def parse_odds(game: dict) -> tuple:
 
     for bm in game.get("bookmakers", []):
         bkey  = bm["key"]
-        bname = BOOKS.get(bkey, bm.get("title", bkey))
+        entry = BOOKS.get(bkey)
+        bname = entry[0] if entry else bm.get("title", bkey)
 
         for market in bm.get("markets", []):
             mkey     = market["key"]

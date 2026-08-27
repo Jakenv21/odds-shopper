@@ -82,24 +82,44 @@ weeks. Turn on Render's failure notifications for these services.
 
 ---
 
-## Step 5 — Lock down the database (do right after Step 3)
+## Step 5 — Lock down the database ✅ DONE 2026-08-18
 
-Right now **both tables have RLS disabled**, and the anon key is in this repo's
-git history — so anyone who finds the repo can read or delete your entire line
-history. Two things to do:
+The RLS hole Supabase emailed about every week (Aug 4 / 11 / 18) is **closed**,
+applied as migration `lock_down_clv_tables_rls_and_bet_clv_view`:
 
-1. **Make the GitHub repo private** (GitHub → Settings → General → Danger Zone).
-   30 seconds, removes the exposure immediately.
-2. **Enable RLS**, but only *after* `SUPABASE_KEY` is the service_role key
-   everywhere (Step 3) — otherwise the app's own writes start failing:
+- `line_snapshots` + `bets` — RLS enabled, zero policies, anon/authenticated
+  grants revoked.
+- `bet_clv` — was a postgres-owned **SECURITY DEFINER** view, so it would have
+  kept serving the same rows straight past the new RLS. Now
+  `security_invoker = true`, with anon access revoked. (The advisory email only
+  mentioned one table; the real exposure was two tables *and* this view.)
 
-   ```sql
-   alter table public.line_snapshots enable row level security;
-   alter table public.bets           enable row level security;
-   ```
+Verified: the leaked anon key now gets `42501 permission denied` (HTTP 401) on
+all three objects. All three ERROR-level advisories cleared.
 
-   No policies needed: service_role bypasses RLS, and with RLS on and zero
-   policies the leaked anon key can no longer touch either table.
+### ⚠️ Still on you — the key swap (before Sat Aug 29, Week 0)
+
+`SUPABASE_KEY` in `odds-shopper/.env` is currently the **anon** key, and that
+key is public in this repo's git history. Now that RLS is on, the anon key can
+no longer write — so **capture and the CFB Desk will fail until you swap it**:
+
+1. Supabase → Project Settings → API Keys → copy the **service_role** (secret) key.
+2. Set it as `SUPABASE_KEY` in `odds-shopper/.env` — cfb-agent reads this file too.
+3. Set it as `SUPABASE_KEY` on **all 6 Render services**.
+4. Make the GitHub repo **private** (Settings → General → Danger Zone).
+5. Smoke test: `/api/capture?token=<CAPTURE_TOKEN>` → expect `opens_recorded > 0`,
+   then confirm rows land: `select phase, count(*) from line_snapshots group by phase;`
+
+Failures are loud: `capture_cron.py` exits non-zero, so Render marks the run
+FAILED rather than dying quietly.
+
+Rollback (only if you need the old behaviour back):
+
+```sql
+grant all on public.line_snapshots, public.bets, public.bet_clv to anon, authenticated;
+alter table public.line_snapshots disable row level security;
+alter table public.bets           disable row level security;
+```
 
 ---
 
